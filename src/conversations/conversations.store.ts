@@ -1,266 +1,258 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import {
     ConflictException,
     Injectable,
     NotFoundException,
-    type OnApplicationShutdown,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { ModelMessage } from 'ai';
+import type { EntityManager } from 'typeorm';
 import type { ReplyOutcome } from '../chat/chat.service.js';
+import { SqliteDatabase } from '../database/sqlite.database.js';
+import {
+    ConversationEntity,
+    MessageEntity,
+    type Workspace,
+} from './conversation.entity.js';
 
 const untitled = '新对话';
-const conversationColumns =
-    'id, title, created_at AS createdAt, updated_at AS updatedAt';
 
-type Conversation = {
-    id: string;
-    title: string;
-    createdAt: string;
-    updatedAt: string;
-};
+export type ReplyRequest = { content: string; thinking?: boolean };
 
-type Message = {
-    id: number;
-    role: 'user' | 'assistant';
-    content: string;
-    status: ReplyOutcome['status'] | 'streaming';
-    thinking: 0 | 1 | null;
-};
+function summary({ id, title, createdAt, updatedAt }: ConversationEntity) {
+    return { id, title, createdAt, updatedAt };
+}
 
-@Injectable()
-export class ConversationsStore implements OnApplicationShutdown {
-    private readonly db: DatabaseSync;
+export class ConversationDatabase {
+    constructor(
+        protected readonly database: SqliteDatabase,
+        protected readonly workspace: Workspace,
+    ) {}
 
-    constructor(config: ConfigService) {
-        const configuredPath = config.getOrThrow<string>('CHAT_DB_PATH');
-        const path =
-            configuredPath === ':memory:'
-                ? configuredPath
-                : resolve(configuredPath);
-        if (path !== ':memory:') {
-            mkdirSync(dirname(path), { recursive: true });
-        }
-        this.db = new DatabaseSync(path);
-        this.db.exec(`
-            PRAGMA foreign_keys = ON;
-            PRAGMA busy_timeout = 3000;
-            PRAGMA journal_mode = WAL;
-
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            ) STRICT;
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-                content TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('complete', 'streaming', 'stopped', 'failed')),
-                thinking INTEGER CHECK (thinking IN (0, 1))
-            ) STRICT;
-
-            CREATE INDEX IF NOT EXISTS messages_by_conversation
-                ON messages(conversation_id, id);
-
-            UPDATE messages SET status = 'stopped' WHERE status = 'streaming';
-        `);
-        this.transaction(() => {
-            const columns = this.db
-                .prepare('PRAGMA table_info(messages)')
-                .all();
-            if (!columns.some(({ name }) => name === 'thinking')) {
-                this.db.exec(
-                    'ALTER TABLE messages ADD COLUMN thinking INTEGER CHECK (thinking IN (0, 1))',
-                );
-            }
+    list(query: string) {
+        return this.database.run(async (manager) => {
+            const conversations = manager
+                .getRepository(ConversationEntity)
+                .createQueryBuilder('conversation');
+            const matches = conversations
+                .subQuery()
+                .select('1')
+                .from(MessageEntity, 'message')
+                .where('message.conversationId = conversation.id')
+                .andWhere('instr(lower(message.content), lower(:query)) > 0');
+            const rows = await conversations
+                .where('conversation.workspace = :workspace', {
+                    workspace: this.workspace,
+                })
+                .andWhere(
+                    `(instr(lower(conversation.title), lower(:query)) > 0 OR EXISTS ${matches.getQuery()})`,
+                    { query },
+                )
+                .orderBy('conversation.updatedAt', 'DESC')
+                .addOrderBy('conversation.rowid', 'DESC')
+                .getMany();
+            return rows.map(summary);
         });
     }
 
-    onApplicationShutdown() {
-        this.db.close();
-    }
-
-    list(query: string): Conversation[] {
-        return this.db
-            .prepare(
-                `
-                SELECT ${conversationColumns}
-                FROM conversations AS c
-                WHERE instr(lower(c.title), lower(?)) > 0
-                   OR EXISTS (
-                        SELECT 1 FROM messages AS m
-                        WHERE m.conversation_id = c.id
-                          AND instr(lower(m.content), lower(?)) > 0
-                   )
-                ORDER BY c.updated_at DESC, c.rowid DESC
-            `,
-            )
-            .all(query, query) as Conversation[];
-    }
-
     create() {
-        const id = randomUUID();
-        const now = new Date().toISOString();
-        this.db
-            .prepare('INSERT INTO conversations VALUES (?, ?, ?, ?)')
-            .run(id, untitled, now, now);
-        return { id, title: untitled, createdAt: now, updatedAt: now };
+        return this.database.run(async (manager) => {
+            const id = randomUUID();
+            const now = new Date().toISOString();
+            const conversation = {
+                id,
+                title: untitled,
+                createdAt: now,
+                updatedAt: now,
+            };
+            await manager.insert(ConversationEntity, {
+                ...conversation,
+                workspace: this.workspace,
+            });
+            return conversation;
+        });
     }
 
     get(id: string) {
+        return this.database.run((manager) =>
+            this.readConversation(manager, id),
+        );
+    }
+
+    protected async readConversation(manager: EntityManager, id: string) {
+        const conversation = await this.find(manager, id);
+        const messages = await this.messages(manager, id);
         return {
-            ...this.find(id),
-            messages: this.messages(id).map(({ thinking, ...message }) => ({
-                ...message,
-                ...(thinking !== null ? { thinking: thinking === 1 } : {}),
-            })),
+            ...summary(conversation),
+            messages: messages.map(
+                ({ id, role, content, status, thinking }) => ({
+                    id,
+                    role,
+                    content,
+                    status,
+                    ...(thinking !== null ? { thinking: thinking === 1 } : {}),
+                }),
+            ),
         };
     }
 
     rename(id: string, title: string) {
-        const result = this.db
-            .prepare('UPDATE conversations SET title = ? WHERE id = ?')
-            .run(title, id);
-        if (!result.changes) {
-            throw new NotFoundException('Conversation not found.');
-        }
-        return this.find(id);
+        return this.database.run(async (manager) => {
+            const result = await manager.update(
+                ConversationEntity,
+                this.scope(id),
+                {
+                    title,
+                },
+            );
+            if (!result.affected) {
+                throw new NotFoundException('Conversation not found.');
+            }
+            return summary(await this.find(manager, id));
+        });
     }
 
     delete(id: string) {
-        this.transaction(() => {
-            this.find(id);
-            this.checkIdle(this.messages(id).at(-1));
-            this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
-        });
-    }
-
-    beginReply(id: string, message?: { content: string; thinking?: boolean }) {
-        return this.transaction(() => {
-            const conversation = this.find(id);
-            const messages = this.messages(id);
-            const last = messages.at(-1);
+        return this.database.transaction(async (manager) => {
+            await this.find(manager, id);
+            const last = await manager.findOne(MessageEntity, {
+                where: { conversationId: id },
+                order: { id: 'DESC' },
+            });
             this.checkIdle(last);
-
-            let replyId: number;
-            if (message) {
-                const { content, thinking } = message;
-                const insert = this.db.prepare(`
-                    INSERT INTO messages (conversation_id, role, content, status, thinking)
-                    VALUES (?, ?, ?, ?, ?)
-                `);
-                insert.run(
-                    id,
-                    'user',
-                    content,
-                    'complete',
-                    thinking === undefined ? null : Number(thinking),
-                );
-                replyId = Number(
-                    insert.run(id, 'assistant', '', 'streaming', null)
-                        .lastInsertRowid,
-                );
-                if (!last && conversation.title === untitled) {
-                    const title = Array.from(content.replace(/\s+/g, ' '))
-                        .slice(0, 32)
-                        .join('');
-                    this.db
-                        .prepare(
-                            'UPDATE conversations SET title = ? WHERE id = ?',
-                        )
-                        .run(title, id);
-                }
-            } else {
-                if (
-                    last?.role !== 'assistant' ||
-                    (last.status !== 'stopped' && last.status !== 'failed')
-                ) {
-                    throw new ConflictException(
-                        'No interrupted reply to retry.',
-                    );
-                }
-                replyId = last.id;
-                this.db
-                    .prepare(
-                        "UPDATE messages SET content = '', status = 'streaming' WHERE id = ?",
-                    )
-                    .run(replyId);
-            }
-
-            this.touch(id);
-            const history = this.messages(id);
-            const mode = history.at(-2)?.thinking;
-            return {
-                replyId,
-                context: this.context(history),
-                thinking: mode == null ? undefined : mode === 1,
-            };
+            await manager.delete(ConversationEntity, this.scope(id));
         });
     }
 
-    finishReply(
+    beginReply(id: string, message?: ReplyRequest) {
+        return this.database.transaction((manager) =>
+            this.prepareReply(manager, id, message),
+        );
+    }
+
+    protected async prepareReply(
+        manager: EntityManager,
+        id: string,
+        message?: ReplyRequest,
+        responseFor?: ReadonlyMap<number, ModelMessage[]>,
+    ) {
+        const conversation = await this.find(manager, id);
+        const messages = await this.messages(manager, id);
+        const last = messages.at(-1);
+        this.checkIdle(last);
+
+        let replyId: number;
+        if (message) {
+            const { content, thinking } = message;
+            await manager.insert(MessageEntity, {
+                conversationId: id,
+                role: 'user',
+                content,
+                status: 'complete',
+                thinking: thinking === undefined ? null : thinking ? 1 : 0,
+            });
+            const reply = manager.create(MessageEntity, {
+                conversationId: id,
+                role: 'assistant',
+                content: '',
+                status: 'streaming',
+                thinking: null,
+            });
+            await manager.insert(MessageEntity, reply);
+            replyId = reply.id;
+            if (!last && conversation.title === untitled) {
+                const title = Array.from(content.replace(/\s+/g, ' '))
+                    .slice(0, 32)
+                    .join('');
+                await manager.update(ConversationEntity, this.scope(id), {
+                    title,
+                });
+            }
+        } else {
+            if (
+                last?.role !== 'assistant' ||
+                (last.status !== 'stopped' && last.status !== 'failed')
+            ) {
+                throw new ConflictException('No interrupted reply to retry.');
+            }
+            replyId = last.id;
+            await manager.update(MessageEntity, replyId, {
+                content: '',
+                status: 'streaming',
+            });
+        }
+
+        await this.touch(manager, id);
+        const history = await this.messages(manager, id);
+        const mode = history.at(-2)?.thinking;
+        return {
+            replyId,
+            context: this.context(history, responseFor),
+            thinking: mode == null ? undefined : mode === 1,
+        };
+    }
+
+    finishReply(id: string, replyId: number, outcome: ReplyOutcome) {
+        return this.database.transaction((manager) =>
+            this.updateReply(manager, id, replyId, outcome),
+        );
+    }
+
+    protected async updateReply(
+        manager: EntityManager,
         id: string,
         replyId: number,
-        { content, status }: ReplyOutcome,
+        outcome: ReplyOutcome,
     ) {
-        this.transaction(() => {
-            const result = this.db
-                .prepare(
-                    `
-                    UPDATE messages SET content = ?, status = ?
-                    WHERE id = ? AND conversation_id = ? AND status = 'streaming'
-                `,
-                )
-                .run(content, status, replyId, id);
-            if (result.changes) {
-                this.touch(id);
-            }
+        if (!(await manager.existsBy(ConversationEntity, this.scope(id))))
+            return;
+        const result = await manager.update(
+            MessageEntity,
+            { id: replyId, conversationId: id, status: 'streaming' },
+            outcome,
+        );
+        if (result.affected) {
+            await this.touch(manager, id);
+        }
+    }
+
+    private async find(manager: EntityManager, id: string) {
+        const conversation = await manager.findOneBy(
+            ConversationEntity,
+            this.scope(id),
+        );
+        if (!conversation) {
+            throw new NotFoundException('Conversation not found.');
+        }
+        return conversation;
+    }
+
+    private scope(id: string) {
+        return { id, workspace: this.workspace };
+    }
+
+    private messages(manager: EntityManager, id: string) {
+        return manager.find(MessageEntity, {
+            where: { conversationId: id },
+            order: { id: 'ASC' },
         });
     }
 
-    private find(id: string) {
-        const row = this.db
-            .prepare(
-                `SELECT ${conversationColumns} FROM conversations WHERE id = ?`,
-            )
-            .get(id) as Conversation | undefined;
-        if (!row) {
-            throw new NotFoundException('Conversation not found.');
-        }
-        return row;
-    }
-
-    private messages(id: string): Message[] {
-        return this.db
-            .prepare(
-                `
-                SELECT id, role, content, status, thinking
-                FROM messages WHERE conversation_id = ? ORDER BY id
-            `,
-            )
-            .all(id) as Message[];
-    }
-
-    private checkIdle(last: Message | undefined) {
+    private checkIdle(last: MessageEntity | null | undefined) {
         if (last?.status === 'streaming') {
             throw new ConflictException('A reply is already in progress.');
         }
     }
 
-    private touch(id: string) {
-        this.db
-            .prepare('UPDATE conversations SET updated_at = ? WHERE id = ?')
-            .run(new Date().toISOString(), id);
+    private touch(manager: EntityManager, id: string) {
+        return manager.update(ConversationEntity, this.scope(id), {
+            updatedAt: new Date().toISOString(),
+        });
     }
 
-    private context(messages: Message[]): ModelMessage[] {
+    private context(
+        messages: MessageEntity[],
+        responseFor?: ReadonlyMap<number, ModelMessage[]>,
+    ): ModelMessage[] {
         const context: ModelMessage[] = [];
         for (const [index, message] of messages.entries()) {
             if (message.role !== 'user') {
@@ -272,22 +264,19 @@ export class ConversationsStore implements OnApplicationShutdown {
             } else if (reply?.content) {
                 context.push(
                     { role: 'user', content: message.content },
-                    { role: 'assistant', content: reply.content },
+                    ...(responseFor?.get(reply.id) ?? [
+                        { role: 'assistant', content: reply.content } as const,
+                    ]),
                 );
             }
         }
         return context;
     }
+}
 
-    private transaction<T>(operation: () => T): T {
-        this.db.exec('BEGIN IMMEDIATE');
-        try {
-            const result = operation();
-            this.db.exec('COMMIT');
-            return result;
-        } catch (error) {
-            this.db.exec('ROLLBACK');
-            throw error;
-        }
+@Injectable()
+export class ConversationsStore extends ConversationDatabase {
+    constructor(database: SqliteDatabase) {
+        super(database, 'chat');
     }
 }

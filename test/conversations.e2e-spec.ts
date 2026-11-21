@@ -32,7 +32,7 @@ describe('Conversations (e2e)', () => {
                             AI_DEEP_MAX_OUTPUT_TOKENS: 4000,
                             AI_PROJECT_NAME: 'Conversation Test',
                             AI_TIME_ZONE: 'Asia/Shanghai',
-                            CHAT_DB_PATH: ':memory:',
+                            DB_PATH: ':memory:',
                         }),
                     ],
                 }),

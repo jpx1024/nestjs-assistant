@@ -15,6 +15,7 @@ describe('validateEnv', () => {
             AI_API_KEY: undefined,
             AI_PROJECT_NAME: 'nestjs-assistant',
             AI_TIME_ZONE: 'Asia/Shanghai',
+            DB_PATH: 'data/assistant.sqlite',
             PORT: 3000,
         });
     });
@@ -55,5 +56,38 @@ describe('validateEnv', () => {
                 AI_TIME_ZONE: 'invalid/time-zone',
             }),
         ).toThrow('AI_TIME_ZONE');
+    });
+
+    it('parses the optional SQLite schema synchronization flag', () => {
+        expect(
+            validateEnv({
+                LM_STUDIO_MODEL: 'local-chat',
+                DB_SYNCHRONIZE: 'false',
+            }),
+        ).toMatchObject({ DB_SYNCHRONIZE: false });
+        expect(
+            validateEnv({
+                LM_STUDIO_MODEL: 'local-chat',
+                DB_SYNCHRONIZE: 'true',
+            }),
+        ).toMatchObject({ DB_SYNCHRONIZE: true });
+    });
+
+    it('resolves the explicit Agent model connection separately from Chat', () => {
+        expect(
+            validateEnv({
+                LM_STUDIO_MODEL: 'chat-model',
+                AGENT_PROVIDER: 'openai',
+                AGENT_MODEL: 'agent-model',
+                AGENT_BASE_URL: 'https://agent.example.com/v1',
+                AGENT_API_KEY: 'agent-key',
+            }),
+        ).toMatchObject({
+            AI_MODEL: 'chat-model',
+            AI_BASE_URL: 'http://127.0.0.1:1234/v1',
+            AGENT_MODEL: 'agent-model',
+            AGENT_BASE_URL: 'https://agent.example.com/v1',
+            AGENT_API_KEY: 'agent-key',
+        });
     });
 });

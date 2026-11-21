@@ -20,36 +20,63 @@ const modelListSchema = z.object({
     ),
 });
 
+export type LmStudioConnection = {
+    baseURL: string;
+    modelId: string;
+    apiKey?: string;
+};
+
 @Injectable()
 export class LmStudioThinkingService {
-    private check?: { expiresAt: number; available: Promise<boolean> };
+    private check?: {
+        model: string;
+        expiresAt: number;
+        available: Promise<boolean>;
+    };
 
     constructor(private readonly config: ConfigService) {}
 
-    async isAvailable(): Promise<boolean> {
-        if (this.config.get<string>('AI_PROVIDER') !== 'lm-studio') {
-            return false;
+    async isAvailable(connection?: LmStudioConnection): Promise<boolean> {
+        if (!connection) {
+            if (this.config.get<string>('AI_PROVIDER') !== 'lm-studio') {
+                return false;
+            }
+            connection = {
+                baseURL: this.config.getOrThrow<string>('AI_BASE_URL'),
+                modelId: this.config.getOrThrow<string>('AI_MODEL'),
+                apiKey: this.config.get<string>('AI_API_KEY'),
+            };
         }
-        if (!this.check || this.check.expiresAt <= Date.now()) {
+        const model = JSON.stringify([connection.baseURL, connection.modelId]);
+        if (
+            !this.check ||
+            this.check.model !== model ||
+            this.check.expiresAt <= Date.now()
+        ) {
             this.check = {
+                model,
                 expiresAt: Date.now() + 15_000,
-                available: this.checkModel(),
+                available: this.checkModel(connection),
             };
         }
         return this.check.available;
     }
 
-    private async checkModel(): Promise<boolean> {
-        const url = new URL(this.config.getOrThrow<string>('AI_BASE_URL'));
+    private async checkModel({
+        baseURL,
+        modelId,
+        apiKey,
+    }: LmStudioConnection): Promise<boolean> {
+        const url = new URL(baseURL);
         const prefix = url.pathname.replace(/\/v1\/?$/, '').replace(/\/$/, '');
         url.pathname = prefix + '/api/v1/models';
         url.search = '';
         url.hash = '';
-        const modelId = this.config.getOrThrow<string>('AI_MODEL');
-        const key = this.config.get<string>('AI_API_KEY');
         try {
             const response = await fetch(url, {
-                headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+                headers: apiKey
+                    ? { Authorization: `Bearer ${apiKey}` }
+                    : undefined,
                 signal: AbortSignal.timeout(2000),
             });
             if (!response.ok) {

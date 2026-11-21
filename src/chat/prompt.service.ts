@@ -10,13 +10,12 @@ type PromptContext = {
     nodeVersion: string;
 };
 
-@Injectable()
-export class PromptService {
+export class SystemPromptTemplate {
     private readonly render: (context: PromptContext) => string;
     private readonly environment: Omit<PromptContext, 'currentDate'>;
     private readonly dateFormatter: Intl.DateTimeFormat;
 
-    constructor(config: ConfigService) {
+    constructor(config: ConfigService, template: URL) {
         const timeZone = config.getOrThrow<string>('AI_TIME_ZONE');
         this.environment = {
             projectName: config.getOrThrow<string>('AI_PROJECT_NAME'),
@@ -28,10 +27,7 @@ export class PromptService {
             dateStyle: 'long',
         });
 
-        const source = readFileSync(
-            new URL('../../prompts/assistant.system.md', import.meta.url),
-            'utf8',
-        );
+        const source = readFileSync(template, 'utf8');
         this.render = Handlebars.compile<PromptContext>(source, {
             strict: true,
             noEscape: true,
@@ -46,5 +42,15 @@ export class PromptService {
             ...this.environment,
             currentDate: this.dateFormatter.format(now),
         }).trim();
+    }
+}
+
+@Injectable()
+export class PromptService extends SystemPromptTemplate {
+    constructor(config: ConfigService) {
+        super(
+            config,
+            new URL('../../prompts/assistant.system.md', import.meta.url),
+        );
     }
 }

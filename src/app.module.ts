@@ -4,6 +4,9 @@ import { AiModule } from '@nestjs/ai';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { createObserveModule } from '@nestjs/observe';
+import { AgentModule } from './agent/agent.module.js';
+import { AgentToolsModule } from './agent/agent-search.js';
+import { agentModelName } from './agent/agent.service.js';
 import { ChatModule } from './chat/chat.module.js';
 import { fetchLmStudioResponses } from './chat/lm-studio-responses.js';
 import { lmStudioResponsesModel } from './chat/lm-studio-thinking.service.js';
@@ -24,6 +27,10 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
                 const baseURL = config.getOrThrow<string>('AI_BASE_URL');
                 const apiKey = config.get<string>('AI_API_KEY');
                 const modelId = config.getOrThrow<string>('AI_MODEL');
+                const agentModel = config.get<string>('AGENT_MODEL');
+                const agentIsLocal =
+                    config.get<string>('AGENT_PROVIDER') === 'lm-studio';
+                const agentKey = config.get<string>('AGENT_API_KEY');
                 const provider = createOpenAICompatible({
                     name,
                     baseURL,
@@ -31,6 +38,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
                 });
 
                 return {
+                    include: [AgentToolsModule],
                     models: {
                         default: {
                             model: provider(modelId),
@@ -46,6 +54,20 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
                                   }).responses(modelId),
                               }
                             : {}),
+                        ...(agentModel && (agentIsLocal || agentKey)
+                            ? {
+                                  [agentModelName]: createOpenAI({
+                                      baseURL:
+                                          config.getOrThrow<string>(
+                                              'AGENT_BASE_URL',
+                                          ),
+                                      apiKey: agentKey ?? 'lm-studio',
+                                      ...(agentIsLocal
+                                          ? { fetch: fetchLmStudioResponses }
+                                          : {}),
+                                  }).responses(agentModel),
+                              }
+                            : {}),
                     },
                     defaults: {
                         maxOutputTokens: config.getOrThrow<number>(
@@ -59,6 +81,8 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
         }),
         ChatModule,
         ConversationsModule,
+        AgentToolsModule,
+        AgentModule,
         // Distributed tracing, auto-correlated logs, request/job metrics, error
         // telemetry, alarms, and more — out of the box. Sign up at https://observe.nestjs.com,
         // then run `npx @nestjs/observe link` to write your key pair into .env.

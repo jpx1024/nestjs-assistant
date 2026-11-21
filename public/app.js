@@ -17,18 +17,34 @@ const notice = byId('notice');
 const dialog = byId('conversation-dialog');
 const dialogName = byId('dialog-name');
 const dialogSubmit = byId('dialog-submit');
+const workspaceNotice = byId('workspace-notice');
+const workspaceButtons = [...document.querySelectorAll('[data-workspace]')];
 
-const api = '/api/conversations';
+const workspaces = {
+    chat: {
+        api: '/api/conversations',
+        model: '/api/chat/model',
+        preference: 'assistant-conversation',
+    },
+    agent: {
+        api: '/api/agent/conversations',
+        model: '/api/agent/model',
+        preference: 'assistant-agent-conversation',
+    },
+};
+const workspaceKey = 'assistant-workspace';
 const themeKey = 'assistant-theme';
-const conversationKey = 'assistant-conversation';
 const defaultTitle = '新对话';
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
 const reasoningByConversation = new Map();
+const drafts = { chat: '', agent: '' };
 const state = {
+    mode: readPreference(workspaceKey) === 'agent' ? 'agent' : 'chat',
     conversation: null,
     history: [],
     pending: null,
     dialogAction: null,
+    modelAvailable: true,
     thinkingAvailable: false,
     thinking: false,
 };
@@ -122,6 +138,13 @@ function publicError(message) {
         return '模型没有返回正文，可以重试。';
     if (/cannot switch thinking modes/i.test(message))
         return '当前模型无法切换思考模式。';
+    if (/AGENT_MODEL/.test(message))
+        return '请在 .env 设置 AGENT_MODEL 后重启。';
+    if (/AGENT_API_KEY/.test(message)) return '请在 .env 设置 Agent 模型密钥。';
+    if (/tool step limit/i.test(message))
+        return '已达到 Agent 的工具调用轮数上限。';
+    if (/model or tool request failed/i.test(message))
+        return 'Agent 执行失败，可以稍后重试。';
     if (/already in progress/i.test(message)) return '这段对话正在生成回复。';
     if (/reply could not be saved/i.test(message)) return '回复未能保存。';
     if (/conversation not found/i.test(message)) return '找不到这段对话。';
@@ -152,7 +175,7 @@ async function request(path, { method = 'GET', body } = {}) {
 }
 
 function conversationPath(id) {
-    return api + '/' + encodeURIComponent(id);
+    return workspaces[state.mode].api + '/' + encodeURIComponent(id);
 }
 
 function nearBottom() {
@@ -170,11 +193,18 @@ function scrollToLatest() {
 
 function updateControls() {
     const busy = Boolean(state.pending);
+    for (const button of workspaceButtons) {
+        button.disabled = busy;
+        button.setAttribute(
+            'aria-pressed',
+            String(button.dataset.workspace === state.mode),
+        );
+    }
     thinkingToggle.hidden = !state.thinkingAvailable;
     thinkingToggle.disabled = busy;
     thinkingToggle.setAttribute('aria-pressed', String(state.thinking));
     sendButton.hidden = busy;
-    sendButton.disabled = !input.value.trim();
+    sendButton.disabled = !state.modelAvailable || !input.value.trim();
     stopButton.hidden = !busy;
     stopButton.disabled = Boolean(state.pending?.abort.signal.aborted);
     newChat.disabled = busy;
@@ -269,7 +299,9 @@ function renderHistory() {
 async function loadHistory() {
     const version = ++historyRequest;
     const rows = await request(
-        api + '?q=' + encodeURIComponent(search.value.trim()),
+        workspaces[state.mode].api +
+            '?q=' +
+            encodeURIComponent(search.value.trim()),
     );
     if (version === historyRequest) {
         state.history = rows;
@@ -331,11 +363,73 @@ function fillReasoning(body, reasoning) {
     }
 }
 
+function fillSearches(body, searches) {
+    if (!searches?.length) return;
+    let panel = body.querySelector(':scope > .agent-search-panel');
+    if (!panel) {
+        panel = element('details', 'agent-search-panel');
+        panel.open = true;
+        panel.append(element('summary'), element('div', 'agent-search-list'));
+        body.insertBefore(panel, body.querySelector(':scope > .reply-body'));
+    }
+    const version = searches
+        .map(({ id, status }) => id + ':' + status)
+        .join(',');
+    if (panel.dataset.version === version) return;
+    panel.dataset.version = version;
+    panel.firstElementChild.textContent = searches.some(
+        (item) => item.status === 'searching',
+    )
+        ? '正在搜索…'
+        : `联网搜索（${searches.length}）`;
+    const list = panel.lastElementChild;
+    list.replaceChildren();
+    for (const activity of searches) {
+        const row = element('div');
+        const label =
+            activity.status === 'failed'
+                ? '搜索失败'
+                : activity.status === 'stopped'
+                  ? '已取消'
+                  : activity.status === 'complete' &&
+                      activity.sources.length === 0
+                    ? '无匹配结果'
+                    : '';
+        row.append(
+            element(
+                'p',
+                'agent-search-query',
+                activity.query + (label ? ' · ' + label : ''),
+            ),
+        );
+        if (activity.sources.length) {
+            const sources = element('ol', 'agent-search-sources');
+            for (const source of activity.sources) {
+                if (
+                    typeof source.url !== 'string' ||
+                    !/^https?:\/\//i.test(source.url)
+                )
+                    continue;
+                const item = element('li');
+                const link = element('a', '', source.title || source.url);
+                link.href = source.url;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                item.append(link);
+                sources.append(item);
+            }
+            row.append(sources);
+        }
+        list.append(row);
+    }
+}
+
 function fillAssistant(body, message, canRetry) {
     const reasoning =
         message.reasoning ??
         reasoningByConversation.get(state.conversation?.id)?.get(message.id);
     fillReasoning(body, reasoning);
+    fillSearches(body, message.searches);
     let replyBody = body.querySelector(':scope > .reply-body');
     if (!replyBody) {
         replyBody = element('div', 'reply-body');
@@ -349,11 +443,15 @@ function fillAssistant(body, message, canRetry) {
     const text =
         message.note ||
         {
-            streaming: message.thinking
-                ? message.content
-                    ? '正在作答…'
-                    : '正在思考…'
-                : '正在生成…',
+            streaming: message.searches?.some(
+                (activity) => activity.status === 'searching',
+            )
+                ? '正在查找资料…'
+                : message.thinking
+                  ? message.content
+                      ? '正在作答…'
+                      : '正在思考…'
+                  : '正在生成…',
             stopped: '已停止生成',
             failed: '回复生成失败',
         }[message.status];
@@ -411,7 +509,7 @@ function renderConversation({ follow = true } = {}) {
 
 function setConversation(conversation) {
     state.conversation = conversation;
-    savePreference(conversationKey, conversation?.id ?? null);
+    savePreference(workspaces[state.mode].preference, conversation?.id ?? null);
     renderConversation();
     renderHistory();
 }
@@ -480,7 +578,7 @@ async function* streamEvents(response) {
 }
 
 async function sendReply({ retry = false } = {}) {
-    if (state.pending) return;
+    if (state.pending || !state.modelAvailable) return;
     const text = input.value.trim();
     if (!retry && !text) return;
     const pending = { abort: new AbortController() };
@@ -497,7 +595,9 @@ async function sendReply({ retry = false } = {}) {
 
     try {
         if (!state.conversation) {
-            const created = await request(api, { method: 'POST' });
+            const created = await request(workspaces[state.mode].api, {
+                method: 'POST',
+            });
             setConversation({ ...created, messages: [] });
         }
         if (pending.abort.signal.aborted) return;
@@ -516,6 +616,7 @@ async function sendReply({ retry = false } = {}) {
             status: 'streaming',
             thinking,
             reasoning: { text: '', open: true },
+            searches: [],
         };
         if (retry) {
             conversation.messages.splice(-1, 1, reply);
@@ -557,6 +658,14 @@ async function sendReply({ retry = false } = {}) {
                 frame ??= requestAnimationFrame(paint);
             } else if (part.type === 'reasoning-delta' && thinking) {
                 reply.reasoning.text += part.delta;
+                frame ??= requestAnimationFrame(paint);
+            } else if (part.type === 'data-agent-search') {
+                const activity = part.data;
+                const index = reply.searches.findIndex(
+                    ({ id }) => id === activity.id,
+                );
+                if (index < 0) reply.searches.push(activity);
+                else reply.searches[index] = activity;
                 frame ??= requestAnimationFrame(paint);
             } else if (part.type === 'error') {
                 throw new Error(publicError(part.errorText));
@@ -784,27 +893,88 @@ messages.addEventListener('click', async (event) => {
 async function loadModel() {
     const label = byId('model-label');
     const pill = byId('model-pill');
+    const mode = state.mode;
     try {
-        const { provider, model, thinkingAvailable } =
-            await request('/api/chat/model');
+        const {
+            provider,
+            model,
+            thinkingAvailable,
+            modelAvailable,
+            searchAvailable,
+        } = await request(workspaces[mode].model);
+        if (mode !== state.mode) return;
         const name = provider === 'lm-studio' ? 'LM Studio' : 'OpenAI';
-        pill.title = name + ' · ' + model;
-        label.textContent = model;
+        pill.title = model ? name + ' · ' + model : 'Agent 模型未配置';
+        label.textContent = model ?? '模型未配置';
         state.thinkingAvailable = thinkingAvailable === true;
+        state.thinking = state.thinkingAvailable && state.thinking;
+        state.modelAvailable = modelAvailable !== false;
+        const noticeText = !state.modelAvailable
+            ? model
+                ? '在 .env 设置 AGENT_API_KEY 后重启。'
+                : '在 .env 设置 AGENT_MODEL 后重启。'
+            : mode === 'agent' && !searchAvailable
+              ? '联网搜索需要配置 DEEPSEEK_SEARCH_API_KEY。'
+              : '';
+        workspaceNotice.textContent = noticeText;
+        workspaceNotice.hidden = !noticeText;
         updateControls();
     } catch {
+        if (mode !== state.mode) return;
         pill.title = '模型配置读取失败';
         label.textContent = '模型配置不可用';
+        if (mode === 'agent') {
+            workspaceNotice.textContent =
+                'Agent 配置读取失败，请刷新页面后重试。';
+            workspaceNotice.hidden = false;
+        }
     }
 }
 
-resizeInput();
-renderHistory();
-void loadModel();
-void loadHistory().catch(() => report('历史记录加载失败。'));
-const savedId = readPreference(conversationKey);
-if (savedId) {
-    void openConversation(savedId).catch(() =>
-        savePreference(conversationKey, null),
-    );
+function showWorkspace() {
+    const agent = state.mode === 'agent';
+    workspaceNotice.hidden = true;
+    byId('welcome-title').textContent = agent
+        ? 'Agent 工作区'
+        : '今天想聊些什么？';
+    byId('welcome-description').textContent = agent
+        ? '查找网页资料、核对来源，并把搜索记录留在会话里。'
+        : '从一个问题、一个想法，或一段代码开始。';
+    state.thinkingAvailable = false;
+    state.modelAvailable = !agent;
+    byId('model-label').textContent = '读取模型中';
+    renderConversation();
+    renderHistory();
+    void loadModel();
+    void loadHistory().catch(() => report('历史记录加载失败。'));
+    const { preference } = workspaces[state.mode];
+    const savedId = readPreference(preference);
+    if (savedId) {
+        void openConversation(savedId).catch(() =>
+            savePreference(preference, null),
+        );
+    }
 }
+
+for (const button of workspaceButtons) {
+    button.addEventListener('click', () => {
+        const mode = button.dataset.workspace;
+        if (state.pending || mode === state.mode) return;
+        drafts[state.mode] = input.value;
+        conversationRequest++;
+        historyRequest++;
+        clearTimeout(searchTimer);
+        state.mode = mode;
+        savePreference(workspaceKey, mode);
+        state.conversation = null;
+        state.history = [];
+        state.thinking = false;
+        search.value = '';
+        input.value = drafts[mode];
+        resizeInput();
+        showWorkspace();
+    });
+}
+
+resizeInput();
+showWorkspace();

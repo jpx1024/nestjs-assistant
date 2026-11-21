@@ -9,7 +9,7 @@ export default defineConfig({
         env: {
             AI_PROVIDER: 'lm-studio',
             LM_STUDIO_MODEL: 'test-model',
-            CHAT_DB_PATH: ':memory:',
+            DB_PATH: ':memory:',
         },
     },
 });

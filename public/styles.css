@@ -393,6 +393,38 @@ kbd {
     font-weight: 660;
 }
 
+.workspace-switch {
+    display: inline-flex;
+    flex: none;
+    gap: 0.17rem;
+    padding: 0.17rem;
+    border: 1px solid var(--line);
+    border-radius: 0.72rem;
+    background: var(--sidebar);
+}
+
+.workspace-switch button {
+    min-height: 1.95rem;
+    padding: 0.2rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: 0.48rem;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.87rem;
+    font-weight: 650;
+}
+
+.workspace-switch button[aria-pressed='true'] {
+    border-color: var(--ring);
+    background: var(--panel);
+    color: var(--accent-ink);
+}
+
+.workspace-switch button:hover:enabled {
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+}
+
 .model-pill {
     display: flex;
     align-items: center;
@@ -611,6 +643,14 @@ kbd {
     padding: 1rem 1.45rem 1.5rem;
 }
 
+.workspace-notice {
+    width: min(100%, 49rem);
+    margin: 0 auto 0.45rem;
+    padding-inline: 0.3rem;
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+
 .composer {
     width: min(100%, 49rem);
     margin: 0 auto;
@@ -791,6 +831,44 @@ kbd {
     background: var(--code);
     color: var(--muted);
     font-size: 0.88rem;
+}
+
+.agent-search-panel {
+    margin: 0 0 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 0.7rem;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 0.88rem;
+}
+
+.agent-search-panel > summary {
+    padding: 0.38rem 0.68rem;
+    cursor: pointer;
+    color: var(--accent-ink);
+    font-weight: 650;
+}
+
+.agent-search-list {
+    display: grid;
+    gap: 0.55rem;
+    padding: 0 0.68rem 0.6rem;
+}
+
+.agent-search-query {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.agent-search-sources {
+    margin: 0.15rem 0 0;
+    padding-left: 1.3rem;
+    overflow-wrap: anywhere;
+}
+
+.agent-search-sources a {
+    color: var(--accent-ink);
+    text-underline-offset: 2px;
 }
 
 .reasoning-panel > summary {
@@ -1163,6 +1241,10 @@ kbd {
 }
 
 @media (max-width: 450px) {
+    .top-title {
+        display: none;
+    }
+
     .welcome-emblem {
         width: 5.4rem;
         height: 5.4rem;

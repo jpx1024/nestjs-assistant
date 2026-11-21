@@ -166,6 +166,26 @@
                         >
                             <svg class="icon"><use href="#i-menu"></use></svg>
                         </button>
+                        <div
+                            class="workspace-switch"
+                            role="group"
+                            aria-label="工作区"
+                        >
+                            <button
+                                type="button"
+                                data-workspace="chat"
+                                aria-pressed="true"
+                            >
+                                聊天
+                            </button>
+                            <button
+                                type="button"
+                                data-workspace="agent"
+                                aria-pressed="false"
+                            >
+                                Agent
+                            </button>
+                        </div>
                         <span class="top-title" id="conversation-title"
                             >新对话</span
                         >
@@ -213,7 +233,9 @@
                                 <span class="emblem-point"></span>
                             </div>
                             <h1 id="welcome-title">今天想聊些什么？</h1>
-                            <p>从一个问题、一个想法，或一段代码开始。</p>
+                            <p id="welcome-description">
+                                从一个问题、一个想法，或一段代码开始。
+                            </p>
                             <div class="suggestions" aria-label="对话示例">
                                 <button
                                     class="suggestion"
@@ -273,6 +295,12 @@
                 </div>
 
                 <div class="composer-area">
+                    <p
+                        class="workspace-notice"
+                        id="workspace-notice"
+                        role="status"
+                        hidden
+                    ></p>
                     <form class="composer" id="composer">
                         <textarea
                             id="message-input"

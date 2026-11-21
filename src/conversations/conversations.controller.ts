@@ -59,7 +59,7 @@ export class ConversationsController {
     @Delete(':id')
     @HttpCode(204)
     delete(@Param('id') id: string) {
-        this.conversations.delete(id);
+        return this.conversations.delete(id);
     }
 
     @Post(':id/messages')
@@ -86,10 +86,8 @@ export class ConversationsController {
         message?: z.infer<typeof messageSchema>,
     ) {
         const signal = clientSignal(response);
-        const { replyId, context, thinking } = this.conversations.beginReply(
-            id,
-            message,
-        );
+        const { replyId, context, thinking } =
+            await this.conversations.beginReply(id, message);
         try {
             return await this.chat.stream(context, signal, {
                 thinking,
@@ -97,7 +95,7 @@ export class ConversationsController {
                     this.conversations.finishReply(id, replyId, outcome),
             });
         } catch (error) {
-            this.conversations.finishReply(id, replyId, {
+            await this.conversations.finishReply(id, replyId, {
                 content: '',
                 status: signal.aborted ? 'stopped' : 'failed',
             });

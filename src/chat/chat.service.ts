@@ -19,7 +19,7 @@ export type ReplyOutcome = {
 
 type StreamOptions = {
     thinking?: boolean;
-    onSettled?: (outcome: ReplyOutcome) => void;
+    onSettled?: (outcome: ReplyOutcome) => Promise<void>;
 };
 
 @Injectable()
@@ -91,15 +91,11 @@ export class ChatService {
         }
 
         let content = '';
-        let settled = false;
-        const settle = (status: ReplyOutcome['status']) => {
-            if (settled) {
-                return true;
-            }
-            settled = true;
+        let settlement: Promise<boolean> | undefined;
+        const save = async (status: ReplyOutcome['status']) => {
             clientSignal.removeEventListener('abort', stop);
             try {
-                onSettled?.({ content, status });
+                await onSettled?.({ content, status });
                 return true;
             } catch (error) {
                 this.logger.error(
@@ -109,7 +105,11 @@ export class ChatService {
                 return false;
             }
         };
-        const stop = () => settle('stopped');
+        const settle = (status: ReplyOutcome['status']) =>
+            (settlement ??= save(status));
+        const stop = () => {
+            void settle('stopped');
+        };
         clientSignal.addEventListener('abort', stop, { once: true });
         if (clientSignal.aborted) {
             stop();
@@ -141,7 +141,7 @@ export class ChatService {
                                 : 'The model ended without a text answer.';
                             controller.enqueue({
                                 type: 'error',
-                                errorText: settle('failed')
+                                errorText: (await settle('failed'))
                                     ? message
                                     : 'The reply could not be saved.',
                             });
@@ -149,7 +149,7 @@ export class ChatService {
                         }
                     }
                     if (part.type === 'finish' || part.type === 'error') {
-                        const saved = settle(
+                        const saved = await settle(
                             part.type === 'finish' ? 'complete' : 'failed',
                         );
                         if (!saved) {
@@ -162,9 +162,9 @@ export class ChatService {
                     }
                     controller.enqueue(part);
                 },
-                flush(controller) {
-                    if (!settled) {
-                        settle('failed');
+                async flush(controller) {
+                    if (!settlement) {
+                        await settle('failed');
                         controller.enqueue({
                             type: 'error',
                             errorText: errorText(),

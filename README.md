@@ -30,10 +30,10 @@
 Run `npm run start:dev` and open [http://127.0.0.1:3000](http://127.0.0.1:3000).
 The NestJS server serves the HTML, CSS, and JavaScript from `public/` and
 provides the conversation API under `/api/conversations`. The app listens
-on the loopback interface by default. Conversations,
-including stopped replies with partial text, are saved in SQLite. Set
-`CHAT_DB_PATH` to change the default `data/conversations.sqlite` path.
-Use Node.js 22.13 or later for the built-in SQLite module.
+on the loopback interface by default. Chat and Agent share one SQLite
+database. Set `DB_PATH` to change the default `data/assistant.sqlite` path.
+Use Node.js 22.13+ on the Node 22 line or Node.js 24.11+. SQLite storage
+uses `@nestjs/typeorm` and the `better-sqlite3` driver.
 
 The theme follows the system by default. The theme button saves a manual
 choice in the current browser.
@@ -89,6 +89,35 @@ use this Handlebars template. `AI_PROJECT_NAME` and `AI_TIME_ZONE` in
 the current date in that timezone and the server's Node.js version.
 The date is refreshed for each model call. Keep `prompts/` alongside
 `dist/` when deploying the compiled app.
+
+## Agent workspace
+
+Use the **聊天 / Agent** switch to open the Agent workspace. Conversation
+history is scoped to each workspace. Agent uses its own
+[system prompt](prompts/agent.system.md).
+
+Set `AGENT_PROVIDER` and `AGENT_MODEL` in `.env` before using the Agent.
+For example, use `lm-studio` and `qwen/qwen3.5-9b` to reuse the local LM
+Studio connection. `AGENT_BASE_URL` and `AGENT_API_KEY` can override that
+provider's shared connection settings. Add `DEEPSEEK_SEARCH_API_KEY` to
+activate `web_search` through the standalone DeepSeek Search API.
+
+Agent conversations and model metadata live under `/api/agent`. To send
+a message, call `POST /api/agent/conversations/:id/messages` with
+`{"content":"...","thinking":false}`. Search updates and answer text are
+streamed over SSE. Completed search results and answer text are saved with
+the Agent conversation. Retries reuse the original thinking option, and
+disconnecting cancels the run and its search request.
+
+## SQLite schema
+
+TypeORM creates and updates the SQLite schema from the conversation, message,
+and Agent run entities on startup. Set `DB_PATH` to a new file to start with
+empty histories.
+
+Schema synchronization defaults to enabled outside `NODE_ENV=production`.
+Set `DB_SYNCHRONIZE` to `true` or `false` to override it. With synchronization
+disabled, the configured SQLite file needs an existing schema.
 
 ## Project setup
 
