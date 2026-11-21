@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+            name="description"
+            content="使用本地模型聊天、整理思路和管理会话。"
+        />
+        <title>NestJS Assistant</title>
+        <script>
+            (() => {
+                let theme;
+                try {
+                    theme = localStorage.getItem('assistant-theme');
+                } catch {}
+                document.documentElement.dataset.theme =
+                    theme === 'light' || theme === 'dark'
+                        ? theme
+                        : matchMedia('(prefers-color-scheme: dark)').matches
+                          ? 'dark'
+                          : 'light';
+            })();
+        </script>
+        <link rel="stylesheet" href="/styles.css" />
+        <script defer src="/vendor/markdown-it/markdown-it.umd.min.js"></script>
+        <script defer src="/vendor/highlight/highlight.min.js"></script>
+        <script type="module" src="/app.js"></script>
+    </head>
+    <body>
+        <svg
+            class="icon-library"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+        >
+            <symbol id="i-spark" viewBox="0 0 24 24">
+                <path
+                    d="M12 2.5c.7 5.9 3.6 8.8 9.5 9.5-5.9.7-8.8 3.6-9.5 9.5-.7-5.9-3.6-8.8-9.5-9.5 5.9-.7 8.8-3.6 9.5-9.5Z"
+                />
+            </symbol>
+            <symbol id="i-plus" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14" />
+            </symbol>
+            <symbol id="i-search" viewBox="0 0 24 24">
+                <circle cx="10.5" cy="10.5" r="5.5" />
+                <path d="m15 15 4 4" />
+            </symbol>
+            <symbol id="i-chat" viewBox="0 0 24 24">
+                <path
+                    d="M6 5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 3v-3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"
+                />
+            </symbol>
+            <symbol id="i-sun" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="4" />
+                <path
+                    d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"
+                />
+            </symbol>
+            <symbol id="i-moon" viewBox="0 0 24 24">
+                <path d="M20.5 15.1A9 9 0 0 1 8.9 3.5a9 9 0 1 0 11.6 11.6Z" />
+            </symbol>
+            <symbol id="i-menu" viewBox="0 0 24 24">
+                <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+                <path d="M9 5v14" />
+            </symbol>
+            <symbol id="i-pen" viewBox="0 0 24 24">
+                <path
+                    d="m14 6 4 4M5 19l1-5L16 4a2.8 2.8 0 0 1 4 4L10 18l-5 1Z"
+                />
+            </symbol>
+            <symbol id="i-code" viewBox="0 0 24 24">
+                <path d="m8 7-5 5 5 5m8-10 5 5-5 5m-2-13-4 16" />
+            </symbol>
+            <symbol id="i-grid" viewBox="0 0 24 24">
+                <rect x="3.5" y="4" width="7" height="6" rx="1.4" />
+                <rect x="3.5" y="14" width="7" height="6" rx="1.4" />
+                <path d="M15 7h5m-5 10h5" />
+            </symbol>
+            <symbol id="i-model" viewBox="0 0 24 24">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+                <path
+                    d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"
+                />
+                <rect x="10" y="10" width="4" height="4" rx=".5" />
+            </symbol>
+            <symbol id="i-more" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="1" />
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="19" cy="12" r="1" />
+            </symbol>
+            <symbol id="i-trash" viewBox="0 0 24 24">
+                <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
+            </symbol>
+            <symbol id="i-copy" viewBox="0 0 24 24">
+                <rect x="8" y="8" width="12" height="12" rx="2" />
+                <path
+                    d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"
+                />
+            </symbol>
+            <symbol id="i-close" viewBox="0 0 24 24">
+                <path d="m6 6 12 12M6 18 18 6" />
+            </symbol>
+            <symbol id="i-stop" viewBox="0 0 24 24">
+                <rect
+                    x="6"
+                    y="6"
+                    width="12"
+                    height="12"
+                    rx="2"
+                    fill="currentColor"
+                    stroke="none"
+                />
+            </symbol>
+            <symbol id="i-lock" viewBox="0 0 24 24">
+                <rect x="6" y="10" width="12" height="10" rx="2" />
+                <path d="M9 10V7a3 3 0 0 1 6 0v3m-3 4v2" />
+            </symbol>
+        </svg>
+
+        <div class="workspace" id="workspace">
+            <button
+                class="sidebar-overlay"
+                id="sidebar-overlay"
+                aria-label="关闭会话侧栏"
+                tabindex="-1"
+            ></button>
+            <aside class="sidebar" id="sidebar" aria-label="会话侧栏">
+                <div class="brand">
+                    <span class="brand-mark"
+                        ><svg class="icon"><use href="#i-spark"></use></svg
+                    ></span>
+                    <strong>NestJS Assistant</strong>
+                </div>
+                <button class="new-chat" id="new-chat" type="button">
+                    <svg class="icon"><use href="#i-plus"></use></svg>
+                    新建对话
+                </button>
+                <label class="search">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <input
+                        id="search"
+                        type="search"
+                        placeholder="搜索对话"
+                        aria-label="搜索对话"
+                        maxlength="120"
+                    />
+                    <kbd title="聚焦搜索">Ctrl K</kbd>
+                </label>
+                <nav class="history" id="history" aria-label="历史对话"></nav>
+                <footer class="sidebar-footer">
+                    <svg class="icon"><use href="#i-lock"></use></svg>
+                    历史记录保存在本机
+                </footer>
+            </aside>
+
+            <main class="main">
+                <header class="topbar">
+                    <div class="conversation-heading">
+                        <button
+                            class="icon-button mobile-menu"
+                            id="mobile-menu"
+                            type="button"
+                            aria-label="打开会话侧栏"
+                            aria-controls="sidebar"
+                            aria-expanded="false"
+                        >
+                            <svg class="icon"><use href="#i-menu"></use></svg>
+                        </button>
+                        <span class="top-title" id="conversation-title"
+                            >新对话</span
+                        >
+                    </div>
+                    <div class="top-actions">
+                        <div
+                            class="model-pill"
+                            id="model-pill"
+                            title="正在读取模型配置"
+                        >
+                            <svg class="icon"><use href="#i-model"></use></svg>
+                            <span class="model-label" id="model-label"
+                                >读取模型中</span
+                            >
+                        </div>
+                        <button
+                            class="icon-button theme-button"
+                            id="theme-button"
+                            type="button"
+                            aria-label="切换主题"
+                        >
+                            <svg class="icon theme-moon">
+                                <use href="#i-moon"></use>
+                            </svg>
+                            <svg class="icon theme-sun">
+                                <use href="#i-sun"></use>
+                            </svg>
+                        </button>
+                    </div>
+                </header>
+
+                <div class="chat-scroll" id="chat-scroll">
+                    <section
+                        class="welcome"
+                        id="welcome"
+                        aria-labelledby="welcome-title"
+                    >
+                        <div class="welcome-body">
+                            <div class="welcome-emblem" aria-hidden="true">
+                                <div class="emblem-core">
+                                    <svg class="icon">
+                                        <use href="#i-spark"></use>
+                                    </svg>
+                                </div>
+                                <span class="emblem-point"></span>
+                            </div>
+                            <h1 id="welcome-title">今天想聊些什么？</h1>
+                            <p>从一个问题、一个想法，或一段代码开始。</p>
+                            <div class="suggestions" aria-label="对话示例">
+                                <button
+                                    class="suggestion"
+                                    type="button"
+                                    data-prompt="帮我把这个目标拆成几步可执行的计划："
+                                >
+                                    <span class="suggestion-icon"
+                                        ><svg class="icon">
+                                            <use href="#i-grid"></use></svg
+                                    ></span>
+                                    <span
+                                        ><strong>梳理计划</strong
+                                        ><small
+                                            >把目标拆成可执行的步骤</small
+                                        ></span
+                                    >
+                                </button>
+                                <button
+                                    class="suggestion"
+                                    type="button"
+                                    data-prompt="帮我润色下面这段文字，保留原意，写得简洁自然："
+                                >
+                                    <span class="suggestion-icon"
+                                        ><svg class="icon">
+                                            <use href="#i-pen"></use></svg
+                                    ></span>
+                                    <span
+                                        ><strong>起草文字</strong
+                                        ><small
+                                            >写出更清楚自然的表达</small
+                                        ></span
+                                    >
+                                </button>
+                                <button
+                                    class="suggestion"
+                                    type="button"
+                                    data-prompt="逐步解释下面的代码，并指出需要留意的地方："
+                                >
+                                    <span class="suggestion-icon"
+                                        ><svg class="icon">
+                                            <use href="#i-code"></use></svg
+                                    ></span>
+                                    <span
+                                        ><strong>理解代码</strong
+                                        ><small>阅读逻辑和实现细节</small></span
+                                    >
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                    <section
+                        class="messages"
+                        id="messages"
+                        aria-label="对话消息"
+                        hidden
+                    ></section>
+                </div>
+
+                <div class="composer-area">
+                    <form class="composer" id="composer">
+                        <textarea
+                            id="message-input"
+                            aria-label="输入消息"
+                            placeholder="输入你的问题…"
+                            rows="2"
+                            maxlength="20000"
+                        ></textarea>
+                        <div class="composer-controls">
+                            <button
+                                class="thinking-toggle"
+                                id="thinking-toggle"
+                                type="button"
+                                aria-pressed="false"
+                                hidden
+                            >
+                                <svg class="icon" aria-hidden="true">
+                                    <use href="#i-spark"></use>
+                                </svg>
+                                深度思考
+                            </button>
+                            <span class="shortcut"
+                                ><kbd>Enter</kbd> 发送 <span>·</span>
+                                <kbd>Shift + Enter</kbd> 换行</span
+                            >
+                            <button
+                                class="primary-button send-button"
+                                id="send-button"
+                                type="submit"
+                                disabled
+                            >
+                                发送
+                            </button>
+                            <button
+                                class="primary-button stop-button"
+                                id="stop-button"
+                                type="button"
+                                hidden
+                            >
+                                <svg class="icon">
+                                    <use href="#i-stop"></use></svg
+                                >停止
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="notice" id="notice" role="status" hidden></div>
+            </main>
+        </div>
+
+        <dialog
+            class="dialog"
+            id="conversation-dialog"
+            aria-labelledby="dialog-title"
+        >
+            <form id="conversation-form">
+                <div class="dialog-header">
+                    <h2 id="dialog-title"></h2>
+                    <button
+                        class="icon-button"
+                        id="dialog-close"
+                        type="button"
+                        aria-label="关闭"
+                    >
+                        <svg class="icon"><use href="#i-close"></use></svg>
+                    </button>
+                </div>
+                <p id="dialog-copy" hidden></p>
+                <label id="dialog-field" class="dialog-field" hidden>
+                    对话名称
+                    <input id="dialog-name" maxlength="100" />
+                </label>
+                <div class="dialog-actions">
+                    <button
+                        class="secondary-button"
+                        id="dialog-cancel"
+                        type="button"
+                    >
+                        取消
+                    </button>
+                    <button
+                        class="primary-button"
+                        id="dialog-submit"
+                        type="submit"
+                    >
+                        保存
+                    </button>
+                </div>
+            </form>
+        </dialog>
+    </body>
+</html>
