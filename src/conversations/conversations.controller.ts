@@ -22,6 +22,7 @@ const renameSchema = z.object({ title: z.string().trim().min(1).max(100) });
 const messageSchema = z.object({
     content: z.string().trim().min(1).max(20_000),
     thinking: z.boolean().optional(),
+    webSearch: z.boolean().optional(),
 });
 const searchSchema = z.object({ q: z.string().trim().max(120).optional() });
 
@@ -86,11 +87,14 @@ export class ConversationsController {
         message?: z.infer<typeof messageSchema>,
     ) {
         const signal = clientSignal(response);
-        const { replyId, context, thinking } =
+        const { replyId, context, thinking, search } =
             await this.conversations.beginReply(id, message);
         try {
             return await this.chat.stream(context, signal, {
                 thinking,
+                search,
+                onSearch: (activity) =>
+                    this.conversations.recordReplySearch(id, replyId, activity),
                 onSettled: (outcome) =>
                     this.conversations.finishReply(id, replyId, outcome),
             });

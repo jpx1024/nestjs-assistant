@@ -6,11 +6,11 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { AgentModule } from '../src/agent/agent.module.js';
+import { AgentToolsModule } from '../src/agent/agent-search.js';
 import {
-    AgentToolsModule,
     type SearchResult,
     WebSearchProvider,
-} from '../src/agent/agent-search.js';
+} from '../src/search/web-search.js';
 import { agentModelName } from '../src/agent/agent.service.js';
 import { LmStudioThinkingService } from '../src/chat/lm-studio-thinking.service.js';
 import { ConversationsModule } from '../src/conversations/conversations.module.js';

@@ -10,6 +10,7 @@ import {
     type Relation,
 } from 'typeorm';
 import type { ReplyOutcome } from '../chat/chat.service.js';
+import type { SearchActivity } from '../search/web-search.js';
 
 export type Workspace = 'chat' | 'agent';
 
@@ -63,4 +64,7 @@ export class MessageEntity {
 
     @Column('integer', { nullable: true })
     thinking: 0 | 1 | null;
+
+    @Column('simple-json', { nullable: true })
+    search: SearchActivity | null;
 }

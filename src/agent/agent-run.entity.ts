@@ -10,7 +10,7 @@ import {
 } from 'typeorm';
 import type { ReplyOutcome } from '../chat/chat.service.js';
 import { MessageEntity } from '../conversations/conversation.entity.js';
-import type { SearchActivity } from './agent-search.js';
+import type { SearchActivity } from '../search/web-search.js';
 
 @Entity('agent_runs')
 @Index('agent_runs_by_reply', ['replyId', 'id'])

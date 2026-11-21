@@ -9,6 +9,7 @@ import {
     LmStudioThinkingService,
     lmStudioResponsesModel,
 } from '../src/chat/lm-studio-thinking.service.js';
+import { WebSearchProvider } from '../src/search/web-search.js';
 
 async function* readEvents(response: Response) {
     const reader = response
@@ -52,6 +53,7 @@ describe('POST /api/chat/stream (e2e)', () => {
     let app: INestApplication;
     let model: FakeModel;
     let baseUrl: string;
+    const search = vi.fn().mockResolvedValue({ sources: [] });
 
     beforeAll(async () => {
         model = new FakeModel([]);
@@ -68,6 +70,7 @@ describe('POST /api/chat/stream (e2e)', () => {
                             AI_DEEP_MAX_OUTPUT_TOKENS: 4000,
                             AI_PROJECT_NAME: 'Direct Chat Test',
                             AI_TIME_ZONE: 'Asia/Shanghai',
+                            DEEPSEEK_SEARCH_API_KEY: 'test-key',
                         }),
                     ],
                 }),
@@ -78,7 +81,10 @@ describe('POST /api/chat/stream (e2e)', () => {
                 }),
                 ChatModule,
             ],
-        }).compile();
+        })
+            .overrideProvider(WebSearchProvider)
+            .useValue({ search })
+            .compile();
         app = module.createNestApplication();
         await app.listen(0, '127.0.0.1');
         baseUrl = await app.getUrl();
@@ -92,11 +98,12 @@ describe('POST /api/chat/stream (e2e)', () => {
         messages: unknown = [{ role: 'user', content: 'Say hello' }],
         signal?: AbortSignal,
         thinking?: boolean,
+        webSearch?: boolean,
     ) {
         return fetch(`${baseUrl}/api/chat/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages, thinking }),
+            body: JSON.stringify({ messages, thinking, webSearch }),
             signal,
         });
     }
@@ -130,6 +137,39 @@ describe('POST /api/chat/stream (e2e)', () => {
         expect(events.at(-1)).toBe('finish');
         expect(model.lastCall?.instructions).toContain(
             '项目名称：Direct Chat Test',
+        );
+    });
+
+    it('uses the latest user question as a bounded query in the direct stream', async () => {
+        model.reply('No matching sources were found.');
+        const question = '🔎'.repeat(129) + ' not part of the search query';
+        const response = await send(
+            [
+                { role: 'user', content: 'Previous question' },
+                { role: 'assistant', content: 'Previous reply' },
+                { role: 'user', content: question },
+            ],
+            undefined,
+            undefined,
+            true,
+        );
+        expect(response.status).toBe(200);
+        const events = await collectEvents(response);
+        expect(events.at(0)).toMatchObject({
+            type: 'data-chat-search',
+            data: { status: 'searching' },
+        });
+        expect(events.at(1)).toMatchObject({
+            type: 'data-chat-search',
+            data: { status: 'complete', sources: [] },
+        });
+        expect(events.at(-1)?.type).toBe('finish');
+        expect(search).toHaveBeenCalledExactlyOnceWith(
+            '🔎'.repeat(128),
+            expect.any(AbortSignal),
+        );
+        expect(JSON.stringify(model.lastCall?.options.prompt)).toContain(
+            'not part of the search query',
         );
     });
 

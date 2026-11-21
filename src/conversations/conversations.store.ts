@@ -6,8 +6,10 @@ import {
 } from '@nestjs/common';
 import type { ModelMessage } from 'ai';
 import type { EntityManager } from 'typeorm';
+import { createChatSearch } from '../chat/chat-search.js';
 import type { ReplyOutcome } from '../chat/chat.service.js';
 import { SqliteDatabase } from '../database/sqlite.database.js';
+import type { SearchActivity } from '../search/web-search.js';
 import {
     ConversationEntity,
     MessageEntity,
@@ -16,7 +18,11 @@ import {
 
 const untitled = '新对话';
 
-export type ReplyRequest = { content: string; thinking?: boolean };
+export type ReplyRequest = {
+    content: string;
+    thinking?: boolean;
+    webSearch?: boolean;
+};
 
 function summary({ id, title, createdAt, updatedAt }: ConversationEntity) {
     return { id, title, createdAt, updatedAt };
@@ -84,12 +90,26 @@ export class ConversationDatabase {
         return {
             ...summary(conversation),
             messages: messages.map(
-                ({ id, role, content, status, thinking }) => ({
+                ({ id, role, content, status, thinking, search }) => ({
                     id,
                     role,
                     content,
                     status,
                     ...(thinking !== null ? { thinking: thinking === 1 } : {}),
+                    ...(search && {
+                        searches: [
+                            search.status === 'searching' &&
+                            status !== 'streaming'
+                                ? {
+                                      ...search,
+                                      status:
+                                          status === 'stopped'
+                                              ? 'stopped'
+                                              : 'failed',
+                                  }
+                                : search,
+                        ],
+                    }),
                 }),
             ),
         };
@@ -141,8 +161,10 @@ export class ConversationDatabase {
         this.checkIdle(last);
 
         let replyId: number;
+        let search: SearchActivity | undefined;
         if (message) {
             const { content, thinking } = message;
+            search = message.webSearch ? createChatSearch(content) : undefined;
             await manager.insert(MessageEntity, {
                 conversationId: id,
                 role: 'user',
@@ -156,6 +178,7 @@ export class ConversationDatabase {
                 content: '',
                 status: 'streaming',
                 thinking: null,
+                search: search ?? null,
             });
             await manager.insert(MessageEntity, reply);
             replyId = reply.id;
@@ -175,9 +198,12 @@ export class ConversationDatabase {
                 throw new ConflictException('No interrupted reply to retry.');
             }
             replyId = last.id;
+            if (last.search)
+                search = createChatSearch(last.search.query, last.search.id);
             await manager.update(MessageEntity, replyId, {
                 content: '',
                 status: 'streaming',
+                search: search ?? null,
             });
         }
 
@@ -188,7 +214,20 @@ export class ConversationDatabase {
             replyId,
             context: this.context(history, responseFor),
             thinking: mode == null ? undefined : mode === 1,
+            search,
         };
+    }
+
+    recordReplySearch(id: string, replyId: number, search: SearchActivity) {
+        return this.database.run(async (manager) => {
+            if (!(await manager.existsBy(ConversationEntity, this.scope(id))))
+                return;
+            await manager.update(
+                MessageEntity,
+                { id: replyId, conversationId: id, status: 'streaming' },
+                { search },
+            );
+        });
     }
 
     finishReply(id: string, replyId: number, outcome: ReplyOutcome) {

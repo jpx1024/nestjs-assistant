@@ -8,11 +8,15 @@ type PromptContext = {
     currentDate: string;
     timeZone: string;
     nodeVersion: string;
+    webSearch: boolean;
 };
 
 export class SystemPromptTemplate {
     private readonly render: (context: PromptContext) => string;
-    private readonly environment: Omit<PromptContext, 'currentDate'>;
+    private readonly environment: Omit<
+        PromptContext,
+        'currentDate' | 'webSearch'
+    >;
     private readonly dateFormatter: Intl.DateTimeFormat;
 
     constructor(config: ConfigService, template: URL) {
@@ -37,10 +41,11 @@ export class SystemPromptTemplate {
         this.renderSystemPrompt();
     }
 
-    renderSystemPrompt(now = new Date()): string {
+    renderSystemPrompt(now = new Date(), webSearch = false): string {
         return this.render({
             ...this.environment,
             currentDate: this.dateFormatter.format(now),
+            webSearch,
         }).trim();
     }
 }

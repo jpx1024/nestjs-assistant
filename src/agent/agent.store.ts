@@ -8,7 +8,7 @@ import {
 } from '../conversations/conversations.store.js';
 import { SqliteDatabase } from '../database/sqlite.database.js';
 import { AgentRunEntity } from './agent-run.entity.js';
-import type { SearchActivity } from './agent-search.js';
+import type { SearchActivity } from '../search/web-search.js';
 
 type Run = { runId: number; replyId: number; conversationId: string };
 

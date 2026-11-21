@@ -9,11 +9,13 @@ import {
 } from '@nestjs/common';
 import type { Response as ExpressResponse } from 'express';
 import { z } from 'zod';
+import { createChatSearch } from './chat-search.js';
 import { ChatService } from './chat.service.js';
 import { clientSignal } from './client-signal.js';
 
 const chatSchema = z.object({
     thinking: z.boolean().optional(),
+    webSearch: z.boolean().optional(),
     messages: z
         .array(
             z.object({
@@ -42,9 +44,14 @@ export class ChatController {
     @UsePipes(StandardSchemaValidationPipe)
     stream(
         @Body({ schema: chatSchema })
-        { messages, thinking }: z.infer<typeof chatSchema>,
+        { messages, thinking, webSearch }: z.infer<typeof chatSchema>,
         @Res({ passthrough: true }) response: ExpressResponse,
     ): Promise<Response> {
-        return this.chat.stream(messages, clientSignal(response), { thinking });
+        return this.chat.stream(messages, clientSignal(response), {
+            thinking,
+            search: webSearch
+                ? createChatSearch(messages.at(-1)!.content)
+                : undefined,
+        });
     }
 }

@@ -11,6 +11,7 @@ const messages = byId('messages');
 const composer = byId('composer');
 const input = byId('message-input');
 const thinkingToggle = byId('thinking-toggle');
+const webSearchToggle = byId('web-search-toggle');
 const sendButton = byId('send-button');
 const stopButton = byId('stop-button');
 const notice = byId('notice');
@@ -47,6 +48,8 @@ const state = {
     modelAvailable: true,
     thinkingAvailable: false,
     thinking: false,
+    webSearchAvailable: false,
+    webSearch: false,
 };
 
 let historyRequest = 0;
@@ -141,6 +144,8 @@ function publicError(message) {
     if (/AGENT_MODEL/.test(message))
         return '请在 .env 设置 AGENT_MODEL 后重启。';
     if (/AGENT_API_KEY/.test(message)) return '请在 .env 设置 Agent 模型密钥。';
+    if (/DEEPSEEK_SEARCH_API_KEY/.test(message))
+        return '请配置 DEEPSEEK_SEARCH_API_KEY 后重启。';
     if (/tool step limit/i.test(message))
         return '已达到 Agent 的工具调用轮数上限。';
     if (/model or tool request failed/i.test(message))
@@ -203,6 +208,12 @@ function updateControls() {
     thinkingToggle.hidden = !state.thinkingAvailable;
     thinkingToggle.disabled = busy;
     thinkingToggle.setAttribute('aria-pressed', String(state.thinking));
+    webSearchToggle.hidden = state.mode !== 'chat';
+    webSearchToggle.disabled = busy || !state.webSearchAvailable;
+    webSearchToggle.setAttribute('aria-pressed', String(state.webSearch));
+    webSearchToggle.title = state.webSearchAvailable
+        ? '开启后会将问题开头最多 128 个字符发给 DeepSeek 搜索'
+        : '配置 DEEPSEEK_SEARCH_API_KEY 后可用';
     sendButton.hidden = busy;
     sendButton.disabled = !state.modelAvailable || !input.value.trim();
     stopButton.hidden = !busy;
@@ -610,6 +621,10 @@ async function sendReply({ retry = false } = {}) {
             : state.thinkingAvailable
               ? state.thinking
               : undefined;
+        const webSearch =
+            state.mode === 'chat' &&
+            state.webSearchAvailable &&
+            state.webSearch;
         reply = {
             role: 'assistant',
             content: '',
@@ -648,7 +663,11 @@ async function sendReply({ retry = false } = {}) {
                     ? {}
                     : {
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ content: text, thinking }),
+                          body: JSON.stringify({
+                              content: text,
+                              thinking,
+                              ...(webSearch && { webSearch: true }),
+                          }),
                       }),
             }),
         );
@@ -659,7 +678,10 @@ async function sendReply({ retry = false } = {}) {
             } else if (part.type === 'reasoning-delta' && thinking) {
                 reply.reasoning.text += part.delta;
                 frame ??= requestAnimationFrame(paint);
-            } else if (part.type === 'data-agent-search') {
+            } else if (
+                part.type === 'data-agent-search' ||
+                part.type === 'data-chat-search'
+            ) {
                 const activity = part.data;
                 const index = reply.searches.findIndex(
                     ({ id }) => id === activity.id,
@@ -684,6 +706,10 @@ async function sendReply({ retry = false } = {}) {
         if (frame !== undefined) cancelAnimationFrame(frame);
         if (reply?.status === 'streaming') {
             reply.status = pending.abort.signal.aborted ? 'stopped' : 'failed';
+            for (const activity of reply.searches) {
+                if (activity.status === 'searching')
+                    activity.status = reply.status;
+            }
         }
         let saved;
         if (id) {
@@ -864,6 +890,11 @@ thinkingToggle.addEventListener('click', () => {
     updateControls();
 });
 
+webSearchToggle.addEventListener('click', () => {
+    state.webSearch = !state.webSearch;
+    updateControls();
+});
+
 welcome.addEventListener('click', (event) => {
     const suggestion = event.target.closest('[data-prompt]');
     if (!suggestion) return;
@@ -909,6 +940,10 @@ async function loadModel() {
         state.thinkingAvailable = thinkingAvailable === true;
         state.thinking = state.thinkingAvailable && state.thinking;
         state.modelAvailable = modelAvailable !== false;
+        if (mode === 'chat') {
+            state.webSearchAvailable = searchAvailable === true;
+            state.webSearch = state.webSearchAvailable && state.webSearch;
+        }
         const noticeText = !state.modelAvailable
             ? model
                 ? '在 .env 设置 AGENT_API_KEY 后重启。'
@@ -941,6 +976,7 @@ function showWorkspace() {
         ? '查找网页资料、核对来源，并把搜索记录留在会话里。'
         : '从一个问题、一个想法，或一段代码开始。';
     state.thinkingAvailable = false;
+    state.webSearchAvailable = false;
     state.modelAvailable = !agent;
     byId('model-label').textContent = '读取模型中';
     renderConversation();

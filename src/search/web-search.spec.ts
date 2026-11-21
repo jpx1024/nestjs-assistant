@@ -1,5 +1,5 @@
 import { ConfigService } from '@nestjs/config';
-import { DeepSeekSearchProvider } from './agent-search.js';
+import { DeepSeekSearchProvider } from './web-search.js';
 
 afterEach(() => vi.restoreAllMocks());
 

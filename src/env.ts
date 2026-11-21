@@ -20,6 +20,7 @@ const commonSchema = z.object({
     AI_TIME_ZONE: timeZoneSchema.default('Asia/Shanghai'),
     DB_PATH: z.string().trim().min(1).default('data/assistant.sqlite'),
     DB_SYNCHRONIZE: z.stringbool().optional(),
+    DEEPSEEK_SEARCH_API_KEY: z.string().trim().optional(),
     AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
     AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1024),
     AI_DEEP_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4096),
@@ -59,7 +60,6 @@ const agentSchema = z.object({
         .positive()
         .default(4096),
     AGENT_SEARCH_PROVIDER: z.literal('deepseek').default('deepseek'),
-    DEEPSEEK_SEARCH_API_KEY: z.string().trim().optional(),
 });
 
 const lmStudioSchema = z.object({

@@ -90,6 +90,19 @@ the current date in that timezone and the server's Node.js version.
 The date is refreshed for each model call. Keep `prompts/` alongside
 `dist/` when deploying the compiled app.
 
+## Chat web search
+
+Set `DEEPSEEK_SEARCH_API_KEY` and restart to enable the **联网搜索** button
+in Chat. With the button on, each new message triggers one DeepSeek search
+using up to the first 128 characters of that message. The model receives
+the results as context. Search progress and sources appear above the reply
+and are saved with it. Stopping cancels the search, and retrying a stopped
+or failed reply reapplies its original search setting.
+
+Both `POST /api/chat/stream` and `POST /api/conversations/:id/messages`
+accept `webSearch: true` and emit `data-chat-search` events. The standalone
+stream has no conversation history. Chat and Agent share the same search key.
+
 ## Agent workspace
 
 Use the **聊天 / Agent** switch to open the Agent workspace. Conversation

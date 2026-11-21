@@ -16,11 +16,10 @@ import { LmStudioThinkingService } from '../chat/lm-studio-thinking.service.js';
 import { SystemPromptTemplate } from '../chat/prompt.service.js';
 import {
     type AgentRunBudget,
-    type SearchActivity,
     searchInput,
-    searchOutput,
     searchToolName,
 } from './agent-search.js';
+import { type SearchActivity, searchOutput } from '../search/web-search.js';
 import { AgentStore } from './agent.store.js';
 
 export const agentModelName = 'agent';
