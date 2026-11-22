@@ -122,6 +122,20 @@ streamed over SSE. Completed search results and answer text are saved with
 the Agent conversation. Retries reuse the original thinking option, and
 disconnecting cancels the run and its search request.
 
+## Token usage
+
+Chat and Agent show input, output and total model tokens below each reply.
+Reasoning and cache counts are shown when reported. They are included in
+the output and input counts respectively. Agent totals cover its model
+steps, including calls that read tool results. Completed replies emit a
+`data-usage` SSE event when usage is available. Chat and Agent conversation
+endpoints also save the usage with the reply. If interrupted, the reply
+shows any completed model steps as partial usage.
+
+`AI_INCLUDE_STREAM_USAGE` defaults to `true` and requests usage in
+OpenAI-compatible Chat Completions streams. Set it to `false` if a custom
+endpoint rejects `stream_options`.
+
 ## SQLite schema
 
 TypeORM creates and updates the SQLite schema from the conversation, message,

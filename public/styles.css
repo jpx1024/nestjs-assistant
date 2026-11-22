@@ -1056,6 +1056,24 @@ kbd {
     background: var(--accent-soft);
 }
 
+.reply-usage {
+    margin-top: 0.65rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+}
+
+.reply-usage summary {
+    width: fit-content;
+    cursor: pointer;
+}
+
+.reply-usage-details {
+    margin-top: 0.18rem;
+    padding-inline-start: 1rem;
+}
+
 .pending-dots {
     display: inline-flex;
     gap: 0.19rem;

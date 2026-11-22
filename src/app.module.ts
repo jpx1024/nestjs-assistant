@@ -35,6 +35,9 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
                     name,
                     baseURL,
                     apiKey,
+                    includeUsage: config.getOrThrow<boolean>(
+                        'AI_INCLUDE_STREAM_USAGE',
+                    ),
                 });
 
                 return {

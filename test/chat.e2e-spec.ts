@@ -115,8 +115,17 @@ describe('POST /api/chat/stream (e2e)', () => {
         expect(model.calls).toHaveLength(0);
     });
 
-    it('streams text deltas and a finish event', async () => {
-        model.reply({ text: 'Hello from the model', chunkDelay: 40 });
+    it('streams text and the reported usage before the finish event', async () => {
+        model.reply({
+            text: 'Hello from the model',
+            chunkDelay: 40,
+            usage: {
+                inputTokens: 1248,
+                outputTokens: 320,
+                reasoningTokens: 90,
+                cachedInputTokens: 256,
+            },
+        });
 
         const response = await send();
         expect(response.status).toBe(200);
@@ -125,16 +134,26 @@ describe('POST /api/chat/stream (e2e)', () => {
         );
 
         const deltas: string[] = [];
-        const events: string[] = [];
+        const events: UIMessageChunk[] = [];
         for await (const event of readEvents(response)) {
-            events.push(event.type);
+            events.push(event);
             if (event.type === 'text-delta') {
                 deltas.push(event.delta);
             }
         }
         expect(deltas.length).toBeGreaterThan(1);
         expect(deltas.join('')).toBe('Hello from the model');
-        expect(events.at(-1)).toBe('finish');
+        expect(events.at(-2)).toMatchObject({
+            type: 'data-usage',
+            data: {
+                inputTokens: 1248,
+                outputTokens: 320,
+                totalTokens: 1568,
+                reasoningTokens: 90,
+                cachedInputTokens: 256,
+            },
+        });
+        expect(events.at(-1)?.type).toBe('finish');
         expect(model.lastCall?.instructions).toContain(
             '项目名称：Direct Chat Test',
         );
@@ -182,6 +201,16 @@ describe('POST /api/chat/stream (e2e)', () => {
             type: 'error',
             errorText: 'The model is unavailable or the response failed.',
         });
+    });
+
+    it('omits usage when the provider supplies no token counts', async () => {
+        model.reply({
+            text: 'No usage.',
+            usage: { inputTokens: 0, outputTokens: 0 },
+        });
+        const events = await collectEvents(await send());
+        expect(events.some(({ type }) => type === 'data-usage')).toBe(false);
+        expect(events.at(-1)?.type).toBe('finish');
     });
 
     it.each([
@@ -235,6 +264,15 @@ describe('POST /api/chat/stream (e2e)', () => {
                     await send(undefined, undefined, true),
                 );
                 expect(events).toContainEqual({ type: 'error', errorText });
+                expect(events).toContainEqual(
+                    expect.objectContaining({
+                        type: 'data-usage',
+                        data: expect.objectContaining({
+                            outputTokens,
+                            reasoningTokens: outputTokens,
+                        }),
+                    }),
+                );
                 expect(events.some((event) => event.type === 'finish')).toBe(
                     false,
                 );

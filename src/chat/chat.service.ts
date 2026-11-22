@@ -23,11 +23,17 @@ import {
     lmStudioResponsesModel,
 } from './lm-studio-thinking.service.js';
 import { PromptService } from './prompt.service.js';
+import {
+    addPartialUsage,
+    reportedUsage,
+    type ReplyUsage,
+} from './reply-usage.js';
 
 export type ReplyOutcome = {
     content: string;
     status: 'complete' | 'stopped' | 'failed';
     search?: SearchActivity;
+    usage?: ReplyUsage;
 };
 
 type StreamOptions = {
@@ -81,6 +87,7 @@ export class ChatService {
                           ? 'AI_DEEP_MAX_OUTPUT_TOKENS'
                           : 'AI_MAX_OUTPUT_TOKENS',
                   );
+        let usage: ReplyUsage | undefined;
         const startModel = (context: ModelMessage[]) => {
             const timeout = AbortSignal.timeout(
                 this.config.getOrThrow<number>(
@@ -95,6 +102,9 @@ export class ChatService {
                 messages: context,
                 abortSignal: AbortSignal.any([clientSignal, timeout]),
                 maxOutputTokens,
+                onUsage: (event) => {
+                    usage = addPartialUsage(usage, event.usage);
+                },
                 ...(thinking !== undefined && {
                     model: lmStudioResponsesModel,
                     providerOptions: {
@@ -116,11 +126,6 @@ export class ChatService {
                         : 'The model is unavailable or the response failed.',
             };
         };
-        if (!onSettled && thinking === undefined && !search) {
-            const { answer, errorText } = startModel(messages);
-            return answer.toUIMessageStreamResponse({ errorText });
-        }
-
         let content = '';
         let activity = search;
         let settlement: Promise<boolean> | undefined;
@@ -140,6 +145,7 @@ export class ChatService {
                 await onSettled?.({
                     content,
                     status,
+                    ...(usage && { usage }),
                     ...(finalSearch && { search: finalSearch }),
                 });
                 return true;
@@ -175,38 +181,44 @@ export class ChatService {
                         if (part.type === 'text-delta') {
                             content += part.delta;
                         }
-                        if (
-                            part.type === 'finish' &&
-                            maxOutputTokens !== undefined
-                        ) {
-                            const empty = !content.trim();
-                            // LM Studio can report completion with only reasoning and one token left.
-                            const reachedLimit =
-                                part.finishReason === 'length' ||
-                                (empty &&
-                                    (await answer.usage).outputTokens >=
-                                        Math.max(1, maxOutputTokens - 1));
-                            if (reachedLimit || empty) {
-                                const message = reachedLimit
-                                    ? 'The model reached the output token limit.'
-                                    : 'The model ended without a text answer.';
-                                controller.enqueue({
-                                    type: 'error',
-                                    errorText: (await settle('failed'))
-                                        ? message
-                                        : 'The reply could not be saved.',
-                                });
-                                return;
+                        let failure: string | undefined;
+                        if (part.type === 'finish') {
+                            const counts = await answer.usage;
+                            usage = reportedUsage(counts) ?? usage;
+                            if (maxOutputTokens !== undefined) {
+                                const empty = !content.trim();
+                                // LM Studio can report completion with only reasoning and one token left.
+                                const reachedLimit =
+                                    part.finishReason === 'length' ||
+                                    (empty &&
+                                        counts.outputTokens >=
+                                            Math.max(1, maxOutputTokens - 1));
+                                if (reachedLimit || empty) {
+                                    failure = reachedLimit
+                                        ? 'The model reached the output token limit.'
+                                        : 'The model ended without a text answer.';
+                                }
                             }
                         }
                         if (part.type === 'finish' || part.type === 'error') {
                             const saved = await settle(
-                                part.type === 'finish' ? 'complete' : 'failed',
+                                failure || part.type === 'error'
+                                    ? 'failed'
+                                    : 'complete',
                             );
-                            if (!saved) {
+                            if (saved && usage) {
+                                controller.enqueue({
+                                    type: 'data-usage',
+                                    data: usage,
+                                });
+                            }
+                            const terminalError = saved
+                                ? failure
+                                : 'The reply could not be saved.';
+                            if (terminalError) {
                                 controller.enqueue({
                                     type: 'error',
-                                    errorText: 'The reply could not be saved.',
+                                    errorText: terminalError,
                                 });
                                 return;
                             }

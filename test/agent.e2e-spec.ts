@@ -138,8 +138,22 @@ describe('Agent workspace (e2e)', () => {
                 toolCalls: [
                     { name: 'web_search', input: { query: 'reference code' } },
                 ],
+                usage: {
+                    inputTokens: 100,
+                    outputTokens: 20,
+                    cachedInputTokens: 10,
+                    reasoningTokens: 4,
+                },
             },
-            'The code is XE-71.',
+            {
+                text: 'The code is XE-71.',
+                usage: {
+                    inputTokens: 180,
+                    outputTokens: 36,
+                    cachedInputTokens: 25,
+                    reasoningTokens: 9,
+                },
+            },
         );
         const reply = await request(app.getHttpServer())
             .post(url + '/messages')
@@ -149,6 +163,8 @@ describe('Agent workspace (e2e)', () => {
         expect(reply.text).toContain('"status":"searching"');
         expect(reply.text).toContain('"status":"complete"');
         expect(reply.text).toContain('https://example.com/agent');
+        expect(reply.text).toContain('"type":"data-usage"');
+        expect(reply.text).toContain('"totalTokens":336');
         expect(reply.text).toContain('"type":"finish"');
         expect(chat.calls).toHaveLength(0);
         expect(search).toHaveBeenCalledWith(
@@ -162,6 +178,13 @@ describe('Agent workspace (e2e)', () => {
                 {
                     role: 'assistant',
                     content: 'The code is XE-71.',
+                    usage: {
+                        inputTokens: 280,
+                        outputTokens: 56,
+                        totalTokens: 336,
+                        cachedInputTokens: 35,
+                        reasoningTokens: 13,
+                    },
                     searches: [
                         {
                             query: 'reference code',
@@ -261,5 +284,92 @@ describe('Agent workspace (e2e)', () => {
                 { status: 'complete', content: 'Retry completed.' },
             ],
         });
+    });
+
+    it('saves only completed model steps as partial usage after stopping and replaces it on retry', async () => {
+        const url = `${api}/${await create()}`;
+        model.reply(
+            {
+                toolCalls: [
+                    { name: 'web_search', input: { query: 'reference code' } },
+                ],
+                usage: { inputTokens: 95, outputTokens: 15 },
+            },
+            {
+                text: 'Partial reply with more text still to come.',
+                chunkDelay: 350,
+                usage: { inputTokens: 200, outputTokens: 80 },
+            },
+        );
+        const client = new AbortController();
+        const response = await fetch(baseUrl + url + '/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: 'Find a reference.' }),
+            signal: AbortSignal.any([client.signal, AbortSignal.timeout(2000)]),
+        });
+        const reader = response
+            .body!.pipeThrough(new TextDecoderStream())
+            .getReader();
+        try {
+            let trace = '';
+            while (!trace.includes('"type":"text-delta"')) {
+                const part = await reader.read();
+                if (part.done)
+                    throw new Error('Expected the second model step to start.');
+                trace += part.value;
+            }
+        } finally {
+            client.abort();
+            await reader.cancel().catch(() => {});
+            reader.releaseLock();
+        }
+        await vi.waitFor(async () => {
+            const stopped = await request(app.getHttpServer())
+                .get(url)
+                .expect(200);
+            expect(stopped.body).toMatchObject({
+                messages: [
+                    { role: 'user' },
+                    {
+                        status: 'stopped',
+                        usage: {
+                            inputTokens: 95,
+                            outputTokens: 15,
+                            totalTokens: 110,
+                            partial: true,
+                        },
+                    },
+                ],
+            });
+        });
+        model.reply({
+            text: 'This retry finished.',
+            usage: { inputTokens: 45, outputTokens: 5 },
+        });
+        await request(app.getHttpServer())
+            .post(url + '/messages/retry')
+            .expect(200)
+            .expect(/"totalTokens":50/);
+        const saved = await request(app.getHttpServer()).get(url).expect(200);
+        expect(saved.body).toMatchObject({
+            messages: [
+                { role: 'user' },
+                {
+                    status: 'complete',
+                    usage: {
+                        inputTokens: 45,
+                        outputTokens: 5,
+                        totalTokens: 50,
+                        reasoningTokens: 0,
+                        cachedInputTokens: 0,
+                    },
+                },
+            ],
+        });
+        expect(
+            (saved.body as { messages: { usage?: { partial?: true } }[] })
+                .messages[1].usage?.partial,
+        ).toBeUndefined();
     });
 });

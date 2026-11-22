@@ -82,7 +82,10 @@ describe('Conversations (e2e)', () => {
 
     it('saves messages and supports search, rename and deletion', async () => {
         const conversation = await create();
-        model.reply('The answer is forty-two.');
+        model.reply({
+            text: 'The answer is forty-two.',
+            usage: { inputTokens: 61, outputTokens: 13 },
+        });
         await request(app.getHttpServer())
             .post(conversation + '/messages')
             .send({ content: 'Explain this particular test.' })
@@ -102,6 +105,11 @@ describe('Conversations (e2e)', () => {
                     role: 'assistant',
                     status: 'complete',
                     content: 'The answer is forty-two.',
+                    usage: {
+                        inputTokens: 61,
+                        outputTokens: 13,
+                        totalTokens: 74,
+                    },
                 },
             ],
         });

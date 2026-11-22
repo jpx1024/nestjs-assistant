@@ -16,6 +16,7 @@ describe('validateEnv', () => {
             AI_PROJECT_NAME: 'nestjs-assistant',
             AI_TIME_ZONE: 'Asia/Shanghai',
             DB_PATH: 'data/assistant.sqlite',
+            AI_INCLUDE_STREAM_USAGE: true,
             PORT: 3000,
         });
     });
@@ -27,6 +28,7 @@ describe('validateEnv', () => {
                 OPENAI_MODEL: 'openai-chat',
                 OPENAI_API_KEY: 'test-key',
                 AI_TIMEOUT_MS: '5000',
+                AI_INCLUDE_STREAM_USAGE: 'false',
             }),
         ).toMatchObject({
             AI_PROVIDER: 'openai',
@@ -34,6 +36,7 @@ describe('validateEnv', () => {
             AI_MODEL: 'openai-chat',
             AI_API_KEY: 'test-key',
             AI_TIMEOUT_MS: 5000,
+            AI_INCLUDE_STREAM_USAGE: false,
         });
     });
 

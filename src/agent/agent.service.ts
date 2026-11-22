@@ -15,6 +15,11 @@ import type { ReplyOutcome } from '../chat/chat.service.js';
 import { LmStudioThinkingService } from '../chat/lm-studio-thinking.service.js';
 import { SystemPromptTemplate } from '../chat/prompt.service.js';
 import {
+    addPartialUsage,
+    reportedUsage,
+    type ReplyUsage,
+} from '../chat/reply-usage.js';
+import {
     type AgentRunBudget,
     searchInput,
     searchToolName,
@@ -90,6 +95,7 @@ export class AgentService {
         const turn = await this.store.beginRun(id, message);
         const searches = new Map<string, SearchActivity>();
         let content = '';
+        let usage: ReplyUsage | undefined;
         let settlement: Promise<boolean> | undefined;
         const save = async (
             status: ReplyOutcome['status'],
@@ -106,7 +112,7 @@ export class AgentService {
             try {
                 await this.store.finishRun(
                     turn.run,
-                    { content, status },
+                    { content, status, ...(usage && { usage }) },
                     records,
                     history,
                 );
@@ -159,6 +165,9 @@ export class AgentService {
                 caller: { user: budget },
                 maxSteps,
                 maxOutputTokens,
+                onUsage: (event) => {
+                    usage = addPartialUsage(usage, event.usage);
+                },
                 abortSignal: AbortSignal.any([client, timeout]),
                 providerOptions: {
                     openai: {
@@ -198,54 +207,66 @@ export class AgentService {
                         }
                         if (part.type.startsWith('tool-')) return;
                         if (part.type === 'text-delta') content += part.delta;
+                        let failure: string | undefined;
+                        let history: ModelMessage[] | undefined;
                         if (part.type === 'finish') {
+                            const counts = await answer.usage;
+                            usage = reportedUsage(counts) ?? usage;
                             const empty = !content.trim();
                             const limit =
                                 part.finishReason === 'length' ||
                                 (empty &&
-                                    (await answer.usage).outputTokens >=
+                                    counts.outputTokens >=
                                         Math.max(1, maxOutputTokens - 1));
-                            const failure = limit
+                            failure = limit
                                 ? 'The Agent reached the output token limit.'
                                 : part.finishReason === 'tool-calls'
                                   ? 'The Agent reached its tool step limit.'
                                   : empty
                                     ? 'The Agent ended without a text answer.'
                                     : undefined;
-                            if (failure) {
-                                controller.enqueue({
-                                    type: 'error',
-                                    errorText: (await settle('failed'))
-                                        ? failure
-                                        : 'The Agent reply could not be saved.',
+                            if (!failure) {
+                                history = (
+                                    await answer.responseMessages
+                                ).flatMap((entry) => {
+                                    if (
+                                        entry.role !== 'assistant' ||
+                                        typeof entry.content === 'string'
+                                    )
+                                        return [entry];
+                                    const parts = entry.content.filter(
+                                        (item) => item.type !== 'reasoning',
+                                    );
+                                    return parts.length
+                                        ? [{ ...entry, content: parts }]
+                                        : [];
                                 });
-                                return;
                             }
-                            const history = (
-                                await answer.responseMessages
-                            ).flatMap((entry) => {
-                                if (
-                                    entry.role !== 'assistant' ||
-                                    typeof entry.content === 'string'
-                                )
-                                    return [entry];
-                                const parts = entry.content.filter(
-                                    (item) => item.type !== 'reasoning',
-                                );
-                                return parts.length
-                                    ? [{ ...entry, content: parts }]
-                                    : [];
-                            });
-                            if (!(await settle('complete', history))) {
+                        }
+                        if (part.type === 'finish' || part.type === 'error') {
+                            const saved = await settle(
+                                failure || part.type === 'error'
+                                    ? 'failed'
+                                    : 'complete',
+                                history,
+                            );
+                            if (saved && usage) {
+                                controller.enqueue({
+                                    type: 'data-usage',
+                                    data: usage,
+                                });
+                            }
+                            const terminalError = saved
+                                ? failure
+                                : 'The Agent reply could not be saved.';
+                            if (terminalError) {
                                 controller.enqueue({
                                     type: 'error',
-                                    errorText:
-                                        'The Agent reply could not be saved.',
+                                    errorText: terminalError,
                                 });
                                 return;
                             }
                         }
-                        if (part.type === 'error') await settle('failed');
                         controller.enqueue(part);
                     },
                     async flush(controller) {

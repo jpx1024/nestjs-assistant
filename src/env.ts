@@ -22,6 +22,7 @@ const commonSchema = z.object({
     DB_SYNCHRONIZE: z.stringbool().optional(),
     DEEPSEEK_SEARCH_API_KEY: z.string().trim().optional(),
     AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
+    AI_INCLUDE_STREAM_USAGE: z.stringbool().default(true),
     AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1024),
     AI_DEEP_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4096),
     AI_TIMEOUT_MS: z.coerce

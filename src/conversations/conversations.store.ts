@@ -90,12 +90,13 @@ export class ConversationDatabase {
         return {
             ...summary(conversation),
             messages: messages.map(
-                ({ id, role, content, status, thinking, search }) => ({
+                ({ id, role, content, status, thinking, search, usage }) => ({
                     id,
                     role,
                     content,
                     status,
                     ...(thinking !== null ? { thinking: thinking === 1 } : {}),
+                    ...(usage && { usage }),
                     ...(search && {
                         searches: [
                             search.status === 'searching' &&
@@ -204,6 +205,7 @@ export class ConversationDatabase {
                 content: '',
                 status: 'streaming',
                 search: search ?? null,
+                usage: null,
             });
         }
 

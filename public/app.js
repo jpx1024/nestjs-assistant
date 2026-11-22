@@ -36,6 +36,7 @@ const workspaces = {
 const workspaceKey = 'assistant-workspace';
 const themeKey = 'assistant-theme';
 const defaultTitle = '新对话';
+const tokenFormat = new Intl.NumberFormat('zh-CN');
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
 const reasoningByConversation = new Map();
 const drafts = { chat: '', agent: '' };
@@ -435,6 +436,32 @@ function fillSearches(body, searches) {
     }
 }
 
+function appendReplyUsage(body, usage) {
+    const footer = element('div', 'reply-usage');
+    if (!usage) {
+        footer.textContent = '用量未返回';
+    } else {
+        const format = (tokens) => tokenFormat.format(tokens);
+        const summary = `${usage.partial ? '部分用量 · ' : ''}输入 ${format(usage.inputTokens)} · 输出 ${format(usage.outputTokens)} · 合计 ${format(usage.totalTokens)} Tokens`;
+        const details = [];
+        if (usage.reasoningTokens > 0)
+            details.push(`输出含推理 ${format(usage.reasoningTokens)}`);
+        if (usage.cachedInputTokens > 0)
+            details.push(`输入含缓存 ${format(usage.cachedInputTokens)}`);
+        if (details.length) {
+            const disclosure = element('details');
+            disclosure.append(
+                element('summary', '', summary),
+                element('div', 'reply-usage-details', details.join(' · ')),
+            );
+            footer.append(disclosure);
+        } else {
+            footer.textContent = summary;
+        }
+    }
+    body.append(footer);
+}
+
 function fillAssistant(body, message, canRetry) {
     const reasoning =
         message.reasoning ??
@@ -449,7 +476,10 @@ function fillAssistant(body, message, canRetry) {
     const content = element('div', 'markdown');
     showMarkdown(content, message.content);
     replyBody.replaceChildren(content);
-    if (message.status === 'complete') return;
+    if (message.status === 'complete') {
+        appendReplyUsage(replyBody, message.usage);
+        return;
+    }
 
     const text =
         message.note ||
@@ -481,6 +511,8 @@ function fillAssistant(body, message, canRetry) {
         status.append(retry);
     }
     replyBody.append(status);
+    if (message.status !== 'streaming')
+        appendReplyUsage(replyBody, message.usage);
 }
 
 function renderConversation({ follow = true } = {}) {
@@ -678,6 +710,8 @@ async function sendReply({ retry = false } = {}) {
             } else if (part.type === 'reasoning-delta' && thinking) {
                 reply.reasoning.text += part.delta;
                 frame ??= requestAnimationFrame(paint);
+            } else if (part.type === 'data-usage') {
+                reply.usage = part.data;
             } else if (
                 part.type === 'data-agent-search' ||
                 part.type === 'data-chat-search'
@@ -693,6 +727,8 @@ async function sendReply({ retry = false } = {}) {
                 throw new Error(publicError(part.errorText));
             } else if (part.type === 'finish') {
                 reply.status = 'complete';
+                if (frame !== undefined) cancelAnimationFrame(frame);
+                paint();
             }
         }
         if (reply.status === 'streaming') {
