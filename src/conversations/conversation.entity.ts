@@ -72,3 +72,26 @@ export class MessageEntity {
     @Column('simple-json', { nullable: true })
     usage: ReplyUsage | null;
 }
+
+@Entity('reply_attempts')
+@Index('reply_attempts_by_message', ['replyId'])
+export class ReplyAttemptEntity {
+    @PrimaryGeneratedColumn()
+    id: number;
+
+    @Column('integer', { name: 'reply_id' })
+    replyId: number;
+
+    @ManyToOne(() => MessageEntity, { nullable: false, onDelete: 'CASCADE' })
+    @JoinColumn({ name: 'reply_id' })
+    reply: Relation<MessageEntity>;
+
+    @Column({ type: 'boolean', default: false })
+    finished: boolean;
+
+    @Column({ type: 'boolean', default: false })
+    legacy: boolean;
+
+    @Column('simple-json', { nullable: true })
+    usage: ReplyUsage | null;
+}

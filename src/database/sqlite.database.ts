@@ -1,7 +1,10 @@
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 import { AgentRunEntity } from '../agent/agent-run.entity.js';
-import { MessageEntity } from '../conversations/conversation.entity.js';
+import {
+    MessageEntity,
+    ReplyAttemptEntity,
+} from '../conversations/conversation.entity.js';
 
 @Injectable()
 export class SqliteDatabase implements OnModuleInit {
@@ -15,6 +18,11 @@ export class SqliteDatabase implements OnModuleInit {
                 MessageEntity,
                 { status: 'streaming' },
                 { status: 'stopped' },
+            );
+            await manager.update(
+                ReplyAttemptEntity,
+                { finished: false },
+                { finished: true },
             );
             await manager.update(
                 AgentRunEntity,

@@ -23,6 +23,7 @@ const commonSchema = z.object({
     DEEPSEEK_SEARCH_API_KEY: z.string().trim().optional(),
     AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.7),
     AI_INCLUDE_STREAM_USAGE: z.stringbool().default(true),
+    AI_CONTEXT_WINDOW_TOKENS: z.coerce.number().int().positive().optional(),
     AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1024),
     AI_DEEP_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4096),
     AI_TIMEOUT_MS: z.coerce
@@ -48,6 +49,7 @@ const agentSchema = z.object({
     AGENT_BASE_URL: z.union([baseUrl, z.literal('')]).optional(),
     AGENT_API_KEY: z.string().trim().optional(),
     AGENT_MAX_STEPS: z.coerce.number().int().min(2).max(12).default(4),
+    AGENT_CONTEXT_WINDOW_TOKENS: z.coerce.number().int().positive().optional(),
     AGENT_TIMEOUT_MS: z.coerce
         .number()
         .int()

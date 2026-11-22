@@ -9,6 +9,8 @@ import {
 } from '../search/web-search.js';
 
 export const searchToolName = 'web_search';
+export const searchToolDescription =
+    'Search public web pages for up-to-date information and sources.';
 export const searchInput = z.object({
     query: z
         .string()
@@ -29,8 +31,7 @@ class AgentSearchTool {
 
     @AgentFunction({
         name: searchToolName,
-        description:
-            'Search public web pages for up-to-date information and sources.',
+        description: searchToolDescription,
         inputSchema: searchInput,
     })
     async search(

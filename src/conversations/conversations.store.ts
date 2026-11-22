@@ -13,8 +13,10 @@ import type { SearchActivity } from '../search/web-search.js';
 import {
     ConversationEntity,
     MessageEntity,
+    ReplyAttemptEntity,
     type Workspace,
 } from './conversation.entity.js';
+import { summarizeConversationUsage } from './conversation-usage.js';
 
 const untitled = '新对话';
 
@@ -22,6 +24,12 @@ export type ReplyRequest = {
     content: string;
     thinking?: boolean;
     webSearch?: boolean;
+};
+
+export type ReplyAttempt = {
+    conversationId: string;
+    replyId: number;
+    attemptId: number;
 };
 
 function summary({ id, title, createdAt, updatedAt }: ConversationEntity) {
@@ -84,11 +92,35 @@ export class ConversationDatabase {
         );
     }
 
+    modelContext(id?: string): Promise<ModelMessage[]> {
+        if (!id) return Promise.resolve([]);
+        return this.database.run(async (manager) => {
+            await this.find(manager, id);
+            return this.context(await this.messages(manager, id));
+        });
+    }
+
     protected async readConversation(manager: EntityManager, id: string) {
         const conversation = await this.find(manager, id);
         const messages = await this.messages(manager, id);
+        const attempts = await manager.findBy(ReplyAttemptEntity, {
+            reply: { conversationId: id },
+        });
+        const tracked = new Set(attempts.map(({ replyId }) => replyId));
+        const legacy = messages
+            .filter(
+                (message) =>
+                    message.role === 'assistant' &&
+                    message.status !== 'streaming' &&
+                    !tracked.has(message.id),
+            )
+            .map(({ usage }) => ({ usage, legacy: true }));
         return {
             ...summary(conversation),
+            usageSummary: summarizeConversationUsage([
+                ...attempts.filter(({ finished }) => finished),
+                ...legacy,
+            ]),
             messages: messages.map(
                 ({ id, role, content, status, thinking, search, usage }) => ({
                     id,
@@ -199,6 +231,14 @@ export class ConversationDatabase {
                 throw new ConflictException('No interrupted reply to retry.');
             }
             replyId = last.id;
+            if (!(await manager.existsBy(ReplyAttemptEntity, { replyId }))) {
+                await manager.insert(ReplyAttemptEntity, {
+                    replyId,
+                    finished: true,
+                    legacy: true,
+                    usage: last.usage,
+                });
+            }
             if (last.search)
                 search = createChatSearch(last.search.query, last.search.id);
             await manager.update(MessageEntity, replyId, {
@@ -209,11 +249,15 @@ export class ConversationDatabase {
             });
         }
 
+        const attempt = manager.create(ReplyAttemptEntity, { replyId });
+        await manager.insert(ReplyAttemptEntity, attempt);
         await this.touch(manager, id);
         const history = await this.messages(manager, id);
         const mode = history.at(-2)?.thinking;
         return {
             replyId,
+            attemptId: attempt.id,
+            conversationId: id,
             context: this.context(history, responseFor),
             thinking: mode == null ? undefined : mode === 1,
             search,
@@ -232,31 +276,41 @@ export class ConversationDatabase {
         });
     }
 
-    finishReply(id: string, replyId: number, outcome: ReplyOutcome) {
+    finishReply(attempt: ReplyAttempt, outcome: ReplyOutcome) {
         return this.database.transaction((manager) =>
-            this.updateReply(manager, id, replyId, outcome),
+            this.updateReply(manager, attempt, outcome),
         );
     }
 
     protected async updateReply(
         manager: EntityManager,
-        id: string,
-        replyId: number,
+        { conversationId, replyId, attemptId }: ReplyAttempt,
         outcome: ReplyOutcome,
     ) {
-        if (!(await manager.existsBy(ConversationEntity, this.scope(id))))
+        if (
+            !(await manager.existsBy(
+                ConversationEntity,
+                this.scope(conversationId),
+            ))
+        )
             return;
+        const attempt = await manager.update(
+            ReplyAttemptEntity,
+            { id: attemptId, replyId, finished: false },
+            { finished: true, usage: outcome.usage ?? null },
+        );
+        if (!attempt.affected) return;
         const result = await manager.update(
             MessageEntity,
-            { id: replyId, conversationId: id, status: 'streaming' },
+            { id: replyId, conversationId, status: 'streaming' },
             outcome,
         );
         if (result.affected) {
-            await this.touch(manager, id);
+            await this.touch(manager, conversationId);
         }
     }
 
-    private async find(manager: EntityManager, id: string) {
+    protected async find(manager: EntityManager, id: string) {
         const conversation = await manager.findOneBy(
             ConversationEntity,
             this.scope(id),
@@ -271,7 +325,7 @@ export class ConversationDatabase {
         return { id, workspace: this.workspace };
     }
 
-    private messages(manager: EntityManager, id: string) {
+    protected messages(manager: EntityManager, id: string) {
         return manager.find(MessageEntity, {
             where: { conversationId: id },
             order: { id: 'ASC' },
@@ -290,7 +344,7 @@ export class ConversationDatabase {
         });
     }
 
-    private context(
+    protected context(
         messages: MessageEntity[],
         responseFor?: ReadonlyMap<number, ModelMessage[]>,
     ): ModelMessage[] {

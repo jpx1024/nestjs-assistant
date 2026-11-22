@@ -136,6 +136,19 @@ shows any completed model steps as partial usage.
 OpenAI-compatible Chat Completions streams. Set it to `false` if a custom
 endpoint rejects `stream_options`.
 
+The conversation header shows totals for all finished reply attempts, including
+retries. Older replies contribute their last stored usage. The detail panel
+distinguishes partial and unavailable counts. Chat and Agent conversation
+detail endpoints include this data in `usageSummary`.
+
+The context meter estimates the actual prompt and reserves the output budget
+for the selected thinking mode. For LM Studio it reads the loaded instance's
+window size. `AI_CONTEXT_WINDOW_TOKENS` and `AGENT_CONTEXT_WINDOW_TOKENS` are
+optional fallbacks when the provider does not expose a capacity. The estimate
+updates with the draft and before model calls, including Agent tool steps.
+Its token count is approximate and can differ from the provider's tokenizer.
+An over-budget reading warns in the header while preserving the full prompt.
+
 ## SQLite schema
 
 TypeORM creates and updates the SQLite schema from the conversation, message,

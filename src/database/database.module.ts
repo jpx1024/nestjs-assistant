@@ -7,6 +7,7 @@ import { AgentRunEntity } from '../agent/agent-run.entity.js';
 import {
     ConversationEntity,
     MessageEntity,
+    ReplyAttemptEntity,
 } from '../conversations/conversation.entity.js';
 import { SqliteDatabase } from './sqlite.database.js';
 
@@ -33,6 +34,7 @@ import { SqliteDatabase } from './sqlite.database.js';
                     entities: [
                         ConversationEntity,
                         MessageEntity,
+                        ReplyAttemptEntity,
                         AgentRunEntity,
                     ],
                 };

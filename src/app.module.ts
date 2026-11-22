@@ -8,6 +8,7 @@ import { AgentModule } from './agent/agent.module.js';
 import { AgentToolsModule } from './agent/agent-search.js';
 import { agentModelName } from './agent/agent.service.js';
 import { ChatModule } from './chat/chat.module.js';
+import { withContextReporting } from './chat/context-window.js';
 import { fetchLmStudioResponses } from './chat/lm-studio-responses.js';
 import { lmStudioResponsesModel } from './chat/lm-studio-thinking.service.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
@@ -44,31 +45,38 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
                     include: [AgentToolsModule],
                     models: {
                         default: {
-                            model: provider(modelId),
+                            model: withContextReporting(provider(modelId)),
                             temperature:
                                 config.getOrThrow<number>('AI_TEMPERATURE'),
                         },
                         ...(name === 'lm-studio'
                             ? {
-                                  [lmStudioResponsesModel]: createOpenAI({
-                                      baseURL,
-                                      apiKey: apiKey ?? 'lm-studio',
-                                      fetch: fetchLmStudioResponses,
-                                  }).responses(modelId),
+                                  [lmStudioResponsesModel]:
+                                      withContextReporting(
+                                          createOpenAI({
+                                              baseURL,
+                                              apiKey: apiKey ?? 'lm-studio',
+                                              fetch: fetchLmStudioResponses,
+                                          }).responses(modelId),
+                                      ),
                               }
                             : {}),
                         ...(agentModel && (agentIsLocal || agentKey)
                             ? {
-                                  [agentModelName]: createOpenAI({
-                                      baseURL:
-                                          config.getOrThrow<string>(
-                                              'AGENT_BASE_URL',
-                                          ),
-                                      apiKey: agentKey ?? 'lm-studio',
-                                      ...(agentIsLocal
-                                          ? { fetch: fetchLmStudioResponses }
-                                          : {}),
-                                  }).responses(agentModel),
+                                  [agentModelName]: withContextReporting(
+                                      createOpenAI({
+                                          baseURL:
+                                              config.getOrThrow<string>(
+                                                  'AGENT_BASE_URL',
+                                              ),
+                                          apiKey: agentKey ?? 'lm-studio',
+                                          ...(agentIsLocal
+                                              ? {
+                                                    fetch: fetchLmStudioResponses,
+                                                }
+                                              : {}),
+                                      }).responses(agentModel),
+                                  ),
                               }
                             : {}),
                     },

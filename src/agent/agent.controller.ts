@@ -15,6 +15,10 @@ import {
 import type { Response as ExpressResponse } from 'express';
 import { z } from 'zod';
 import { clientSignal } from '../chat/client-signal.js';
+import {
+    contextRequestSchema,
+    type ContextRequest,
+} from '../chat/context-window.js';
 import { AgentService } from './agent.service.js';
 import { AgentStore } from './agent.store.js';
 
@@ -46,6 +50,17 @@ export class AgentController {
     @Post('conversations')
     create() {
         return this.conversations.create();
+    }
+
+    @Post('conversations/context')
+    @HttpCode(200)
+    async context(
+        @Body({ schema: contextRequestSchema }) request: ContextRequest,
+    ) {
+        return this.agent.contextPreview(
+            await this.conversations.modelContext(request.conversationId),
+            request,
+        );
     }
 
     @Get('conversations/:id')

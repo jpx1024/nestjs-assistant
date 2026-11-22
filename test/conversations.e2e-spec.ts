@@ -42,6 +42,7 @@ describe('Conversations (e2e)', () => {
                     load: [
                         () => ({
                             AI_TIMEOUT_MS: 5000,
+                            AI_CONTEXT_WINDOW_TOKENS: 4096,
                             AI_DEEP_TIMEOUT_MS: 10_000,
                             AI_DEEP_MAX_OUTPUT_TOKENS: 4000,
                             AI_PROJECT_NAME: 'Conversation Test',
@@ -79,6 +80,45 @@ describe('Conversations (e2e)', () => {
             .expect(201);
         return api + '/' + (response.body as { id: string }).id;
     }
+
+    it('estimates the draft without changing history, and reserves more output for thinking', async () => {
+        const url = await create();
+        const id = url.split('/').at(-1);
+        const normal = await request(app.getHttpServer())
+            .post(api + '/context')
+            .send({ conversationId: id, draft: '简短问题' })
+            .expect(200);
+        const deep = await request(app.getHttpServer())
+            .post(api + '/context')
+            .send({
+                conversationId: id,
+                draft: '简短问题'.repeat(100),
+                thinking: true,
+            })
+            .expect(200);
+        expect(normal.body).toMatchObject({
+            windowTokens: 4096,
+            reservedOutputTokens: 1024,
+            overBudgetTokens: 0,
+        });
+        expect(deep.body).toMatchObject({
+            windowTokens: 4096,
+            reservedOutputTokens: 4000,
+            remainingTokens: 0,
+        });
+        expect(
+            (deep.body as { overBudgetTokens: number }).overBudgetTokens,
+        ).toBeGreaterThan(0);
+        await request(app.getHttpServer())
+            .get(url)
+            .expect(200)
+            .expect(({ body }) => {
+                expect(body).toMatchObject({
+                    messages: [],
+                    usageSummary: { attempts: 0 },
+                });
+            });
+    });
 
     it('saves messages and supports search, rename and deletion', async () => {
         const conversation = await create();

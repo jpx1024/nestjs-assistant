@@ -6,12 +6,18 @@ import {
     ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { z } from 'zod';
 import {
     createUIMessageStreamResponse,
     type ModelMessage,
     type UIMessageChunk,
 } from 'ai';
 import type { ReplyOutcome } from '../chat/chat.service.js';
+import {
+    ContextWindowService,
+    type ContextRequest,
+    type ContextEstimate,
+} from '../chat/context-window.js';
 import { LmStudioThinkingService } from '../chat/lm-studio-thinking.service.js';
 import { SystemPromptTemplate } from '../chat/prompt.service.js';
 import {
@@ -23,6 +29,7 @@ import {
     type AgentRunBudget,
     searchInput,
     searchToolName,
+    searchToolDescription,
 } from './agent-search.js';
 import { type SearchActivity, searchOutput } from '../search/web-search.js';
 import { AgentStore } from './agent.store.js';
@@ -39,10 +46,30 @@ export class AgentService {
         private readonly ai: AiService,
         private readonly store: AgentStore,
         private readonly thinking: LmStudioThinkingService,
+        private readonly contextWindow: ContextWindowService,
     ) {
         this.prompt = new SystemPromptTemplate(
             config,
             new URL('../../prompts/agent.system.md', import.meta.url),
+        );
+    }
+
+    contextPreview(messages: ModelMessage[], request: ContextRequest) {
+        const webSearch = this.searchAvailable();
+        return this.contextWindow.preview(
+            'agent',
+            this.prompt.renderSystemPrompt(),
+            messages,
+            { ...request, webSearch },
+            webSearch
+                ? [
+                      {
+                          name: searchToolName,
+                          description: searchToolDescription,
+                          inputSchema: z.toJSONSchema(searchInput),
+                      },
+                  ]
+                : undefined,
         );
     }
 
@@ -156,32 +183,43 @@ export class AgentService {
                     : 'AGENT_MAX_OUTPUT_TOKENS',
             );
             const budget: AgentRunBudget = { searchesRemaining: maxSteps - 1 };
-            const answer = this.ai.streamText({
-                model: agentModelName,
-                label: 'agent',
-                instructions: this.prompt.renderSystemPrompt(),
-                messages: turn.context,
-                ...(this.searchAvailable() ? { tools: [searchToolName] } : {}),
-                caller: { user: budget },
-                maxSteps,
-                maxOutputTokens,
-                onUsage: (event) => {
-                    usage = addPartialUsage(usage, event.usage);
-                },
-                abortSignal: AbortSignal.any([client, timeout]),
-                providerOptions: {
-                    openai: {
-                        store: false,
-                        systemMessageMode: 'system',
-                        parallelToolCalls: false,
-                        ...(turn.thinking !== undefined && {
-                            forceReasoning: true,
-                            reasoningEffort: turn.thinking ? 'high' : 'none',
-                            reasoningSummary: null,
-                        }),
-                    },
-                },
-            });
+            const contextUpdates: ContextEstimate[] = [];
+            const answer = this.contextWindow.observe(
+                'agent',
+                turn.thinking,
+                (value) => contextUpdates.push(value),
+                () =>
+                    this.ai.streamText({
+                        model: agentModelName,
+                        label: 'agent',
+                        instructions: this.prompt.renderSystemPrompt(),
+                        messages: turn.context,
+                        ...(this.searchAvailable()
+                            ? { tools: [searchToolName] }
+                            : {}),
+                        caller: { user: budget },
+                        maxSteps,
+                        maxOutputTokens,
+                        onUsage: (event) => {
+                            usage = addPartialUsage(usage, event.usage);
+                        },
+                        abortSignal: AbortSignal.any([client, timeout]),
+                        providerOptions: {
+                            openai: {
+                                store: false,
+                                systemMessageMode: 'system',
+                                parallelToolCalls: false,
+                                ...(turn.thinking !== undefined && {
+                                    forceReasoning: true,
+                                    reasoningEffort: turn.thinking
+                                        ? 'high'
+                                        : 'none',
+                                    reasoningSummary: null,
+                                }),
+                            },
+                        },
+                    }),
+            );
 
             const record = async (part: UIMessageChunk) => {
                 const activity = this.searchActivity(part, searches);
@@ -196,6 +234,9 @@ export class AgentService {
             const stream = answer.toUIMessageStream({ errorText }).pipeThrough(
                 new TransformStream<UIMessageChunk, UIMessageChunk>({
                     async transform(part, controller) {
+                        for (const data of contextUpdates.splice(0)) {
+                            controller.enqueue({ type: 'data-context', data });
+                        }
                         const activity = await record(part);
                         if (activity) {
                             controller.enqueue({

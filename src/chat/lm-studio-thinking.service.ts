@@ -4,6 +4,15 @@ import { z } from 'zod';
 
 export const lmStudioResponsesModel = 'lmStudioResponses';
 
+export function lmStudioModelsUrl(baseURL: string) {
+    const url = new URL(baseURL);
+    const prefix = url.pathname.replace(/\/v1\/?$/, '').replace(/\/$/, '');
+    url.pathname = prefix + '/api/v1/models';
+    url.search = '';
+    url.hash = '';
+    return url;
+}
+
 const modelListSchema = z.object({
     models: z.array(
         z.object({
@@ -67,13 +76,8 @@ export class LmStudioThinkingService {
         modelId,
         apiKey,
     }: LmStudioConnection): Promise<boolean> {
-        const url = new URL(baseURL);
-        const prefix = url.pathname.replace(/\/v1\/?$/, '').replace(/\/$/, '');
-        url.pathname = prefix + '/api/v1/models';
-        url.search = '';
-        url.hash = '';
         try {
-            const response = await fetch(url, {
+            const response = await fetch(lmStudioModelsUrl(baseURL), {
                 headers: apiKey
                     ? { Authorization: `Bearer ${apiKey}` }
                     : undefined,

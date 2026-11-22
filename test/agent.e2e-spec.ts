@@ -6,6 +6,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { AgentModule } from '../src/agent/agent.module.js';
+import { withContextReporting } from '../src/chat/context-window.js';
 import { AgentToolsModule } from '../src/agent/agent-search.js';
 import {
     type SearchResult,
@@ -46,10 +47,11 @@ describe('Agent workspace (e2e)', () => {
                             AI_PROJECT_NAME: 'Agent E2E',
                             AI_TIME_ZONE: 'Asia/Shanghai',
                             AGENT_PROVIDER: 'lm-studio',
-                            AGENT_BASE_URL: 'http://127.0.0.1:1234/v1',
+                            AGENT_BASE_URL: 'http://127.0.0.1:1/v1',
                             AGENT_MODEL: 'unit-test-agent',
                             AGENT_TIMEOUT_MS: 4000,
                             AGENT_MAX_STEPS: 4,
+                            AGENT_CONTEXT_WINDOW_TOKENS: 8192,
                             AGENT_MAX_OUTPUT_TOKENS: 1024,
                             AGENT_DEEP_MAX_OUTPUT_TOKENS: 2048,
                             AGENT_SEARCH_PROVIDER: 'deepseek',
@@ -60,7 +62,10 @@ describe('Agent workspace (e2e)', () => {
                 AiModule.forRoot({
                     isGlobal: true,
                     include: [AgentToolsModule],
-                    models: { default: chat, [agentModelName]: model },
+                    models: {
+                        default: chat,
+                        [agentModelName]: withContextReporting(model),
+                    },
                     defaults: { retry: false },
                 }),
                 AgentModule,
@@ -102,6 +107,10 @@ describe('Agent workspace (e2e)', () => {
             ['/api/conversations', agentId],
         ]) {
             const other = `${base}/${otherId}`;
+            await request(app.getHttpServer())
+                .post(`${base}/context`)
+                .send({ conversationId: otherId, draft: '' })
+                .expect(404);
             await request(app.getHttpServer())
                 .get(base)
                 .expect(200)
@@ -165,6 +174,28 @@ describe('Agent workspace (e2e)', () => {
         expect(reply.text).toContain('https://example.com/agent');
         expect(reply.text).toContain('"type":"data-usage"');
         expect(reply.text).toContain('"totalTokens":336');
+        const estimates = reply.text
+            .split('\n')
+            .filter((line) => line.startsWith('data: {"type":"data-context"'))
+            .map(
+                (line) =>
+                    (
+                        JSON.parse(line.slice(6)) as {
+                            data: {
+                                step: number;
+                                inputTokens: number;
+                                windowTokens: number;
+                            };
+                        }
+                    ).data,
+            );
+        expect(estimates.map(({ step }) => step)).toEqual([1, 2]);
+        expect(
+            estimates.every(({ windowTokens }) => windowTokens === 8192),
+        ).toBe(true);
+        expect(estimates[1].inputTokens).toBeGreaterThan(
+            estimates[0].inputTokens,
+        );
         expect(reply.text).toContain('"type":"finish"');
         expect(chat.calls).toHaveLength(0);
         expect(search).toHaveBeenCalledWith(
@@ -173,6 +204,7 @@ describe('Agent workspace (e2e)', () => {
         );
         const saved = await request(app.getHttpServer()).get(url).expect(200);
         expect(saved.body).toMatchObject({
+            usageSummary: { attempts: 1, totalTokens: 336 },
             messages: [
                 { role: 'user', thinking: false },
                 {
@@ -263,6 +295,7 @@ describe('Agent workspace (e2e)', () => {
                 .get(url)
                 .expect(200);
             expect(stopped.body).toMatchObject({
+                usageSummary: { attempts: 1, unknownAttempts: 1 },
                 messages: [
                     { role: 'user', thinking: true },
                     { status: 'stopped', searches: [{ status: 'stopped' }] },
@@ -329,6 +362,11 @@ describe('Agent workspace (e2e)', () => {
                 .get(url)
                 .expect(200);
             expect(stopped.body).toMatchObject({
+                usageSummary: {
+                    attempts: 1,
+                    partialAttempts: 1,
+                    totalTokens: 110,
+                },
                 messages: [
                     { role: 'user' },
                     {
@@ -353,6 +391,13 @@ describe('Agent workspace (e2e)', () => {
             .expect(/"totalTokens":50/);
         const saved = await request(app.getHttpServer()).get(url).expect(200);
         expect(saved.body).toMatchObject({
+            usageSummary: {
+                attempts: 2,
+                partialAttempts: 1,
+                totalTokens: 160,
+                inputTokens: 140,
+                outputTokens: 20,
+            },
             messages: [
                 { role: 'user' },
                 {

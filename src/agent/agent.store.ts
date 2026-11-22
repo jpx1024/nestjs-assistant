@@ -4,13 +4,14 @@ import type { EntityManager } from 'typeorm';
 import type { ReplyOutcome } from '../chat/chat.service.js';
 import {
     ConversationDatabase,
+    type ReplyAttempt,
     type ReplyRequest,
 } from '../conversations/conversations.store.js';
 import { SqliteDatabase } from '../database/sqlite.database.js';
 import { AgentRunEntity } from './agent-run.entity.js';
 import type { SearchActivity } from '../search/web-search.js';
 
-type Run = { runId: number; replyId: number; conversationId: string };
+type Run = ReplyAttempt & { runId: number };
 
 @Injectable()
 export class AgentStore extends ConversationDatabase {
@@ -45,26 +46,41 @@ export class AgentStore extends ConversationDatabase {
         });
     }
 
+    override modelContext(id?: string): Promise<ModelMessage[]> {
+        if (!id) return Promise.resolve([]);
+        return this.database.run(async (manager) => {
+            await this.find(manager, id);
+            return this.context(
+                await this.messages(manager, id),
+                await this.modelHistory(manager, id),
+            );
+        });
+    }
+
+    private async modelHistory(manager: EntityManager, conversationId: string) {
+        const history = new Map<number, ModelMessage[]>();
+        for (const run of await this.latestRuns(
+            manager,
+            conversationId,
+            true,
+        )) {
+            if (run.modelMessages) {
+                history.set(
+                    run.replyId,
+                    JSON.parse(run.modelMessages) as ModelMessage[],
+                );
+            }
+        }
+        return history;
+    }
+
     beginRun(conversationId: string, message?: ReplyRequest) {
         return this.database.transaction(async (manager) => {
-            const history = new Map<number, ModelMessage[]>();
-            for (const run of await this.latestRuns(
-                manager,
-                conversationId,
-                true,
-            )) {
-                if (run.modelMessages) {
-                    history.set(
-                        run.replyId,
-                        JSON.parse(run.modelMessages) as ModelMessage[],
-                    );
-                }
-            }
             const reply = await this.prepareReply(
                 manager,
                 conversationId,
                 message,
-                history,
+                await this.modelHistory(manager, conversationId),
             );
             const run = manager.create(AgentRunEntity, {
                 replyId: reply.replyId,
@@ -74,7 +90,12 @@ export class AgentStore extends ConversationDatabase {
             await manager.insert(AgentRunEntity, run);
             return {
                 ...reply,
-                run: { runId: run.id, replyId: reply.replyId, conversationId },
+                run: {
+                    runId: run.id,
+                    replyId: reply.replyId,
+                    attemptId: reply.attemptId,
+                    conversationId,
+                },
             };
         });
     }
@@ -109,12 +130,7 @@ export class AgentStore extends ConversationDatabase {
                 },
             );
             if (result.affected) {
-                await this.updateReply(
-                    manager,
-                    run.conversationId,
-                    run.replyId,
-                    outcome,
-                );
+                await this.updateReply(manager, run, outcome);
             }
         });
     }

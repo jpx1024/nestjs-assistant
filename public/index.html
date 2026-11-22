@@ -217,6 +217,20 @@
                     </div>
                 </header>
 
+                <div class="session-metrics" aria-label="会话指标">
+                    <details class="session-metric" id="session-usage" hidden>
+                        <summary id="session-usage-label">本会话用量</summary>
+                        <div
+                            class="metric-panel"
+                            id="session-usage-detail"
+                        ></div>
+                    </details>
+                    <details class="session-metric" id="context-meter">
+                        <summary id="context-label">上下文窗口</summary>
+                        <div class="metric-panel" id="context-detail"></div>
+                    </details>
+                </div>
+
                 <div class="chat-scroll" id="chat-scroll">
                     <section
                         class="welcome"

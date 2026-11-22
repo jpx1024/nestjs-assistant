@@ -16,6 +16,10 @@ import type { Response as ExpressResponse } from 'express';
 import { z } from 'zod';
 import { ChatService } from '../chat/chat.service.js';
 import { clientSignal } from '../chat/client-signal.js';
+import {
+    contextRequestSchema,
+    type ContextRequest,
+} from '../chat/context-window.js';
 import { ConversationsStore } from './conversations.store.js';
 
 const renameSchema = z.object({ title: z.string().trim().min(1).max(100) });
@@ -42,6 +46,17 @@ export class ConversationsController {
     @Post()
     create() {
         return this.conversations.create();
+    }
+
+    @Post('context')
+    @HttpCode(200)
+    async context(
+        @Body({ schema: contextRequestSchema }) request: ContextRequest,
+    ) {
+        return this.chat.contextPreview(
+            await this.conversations.modelContext(request.conversationId),
+            request,
+        );
     }
 
     @Get(':id')
@@ -87,8 +102,8 @@ export class ConversationsController {
         message?: z.infer<typeof messageSchema>,
     ) {
         const signal = clientSignal(response);
-        const { replyId, context, thinking, search } =
-            await this.conversations.beginReply(id, message);
+        const turn = await this.conversations.beginReply(id, message);
+        const { replyId, context, thinking, search } = turn;
         try {
             return await this.chat.stream(context, signal, {
                 thinking,
@@ -96,10 +111,10 @@ export class ConversationsController {
                 onSearch: (activity) =>
                     this.conversations.recordReplySearch(id, replyId, activity),
                 onSettled: (outcome) =>
-                    this.conversations.finishReply(id, replyId, outcome),
+                    this.conversations.finishReply(turn, outcome),
             });
         } catch (error) {
-            await this.conversations.finishReply(id, replyId, {
+            await this.conversations.finishReply(turn, {
                 content: '',
                 status: signal.aborted ? 'stopped' : 'failed',
             });

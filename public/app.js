@@ -19,6 +19,8 @@ const dialog = byId('conversation-dialog');
 const dialogName = byId('dialog-name');
 const dialogSubmit = byId('dialog-submit');
 const workspaceNotice = byId('workspace-notice');
+const usageMetric = byId('session-usage');
+const contextMeter = byId('context-meter');
 const workspaceButtons = [...document.querySelectorAll('[data-workspace]')];
 
 const workspaces = {
@@ -55,6 +57,8 @@ const state = {
 
 let historyRequest = 0;
 let conversationRequest = 0;
+let contextRequest = 0;
+let contextTimer;
 let searchTimer;
 let noticeTimer;
 
@@ -229,6 +233,116 @@ function resizeInput() {
     input.style.height = 'auto';
     input.style.height = input.scrollHeight + 'px';
     updateControls();
+    queueContextPreview();
+}
+
+function renderMetricDetails(panel, entries, notes = []) {
+    const list = element('dl');
+    for (const [label, value] of entries) {
+        list.append(
+            element('dt', '', label),
+            element('dd', '', tokenFormat.format(value)),
+        );
+    }
+    panel.replaceChildren(list, ...notes.map((note) => element('p', '', note)));
+}
+
+function renderUsageSummary() {
+    const usage = state.conversation?.usageSummary;
+    usageMetric.hidden = !usage;
+    if (!usage) return;
+    const { attempts, unknownAttempts, partialAttempts, legacyAttempts } =
+        usage;
+    const incomplete = unknownAttempts || partialAttempts || legacyAttempts;
+    byId('session-usage-label').textContent =
+        attempts && attempts === unknownAttempts
+            ? '本会话用量 · 未返回'
+            : `本会话用量 · ${incomplete ? '已知 ' : ''}${tokenFormat.format(usage.totalTokens)} Tokens`;
+    const entries = [['生成次数（含重试）', attempts]];
+    if (!attempts || attempts > unknownAttempts) {
+        entries.push(
+            ['累计输入', usage.inputTokens],
+            ['累计输出', usage.outputTokens],
+        );
+        if (usage.reasoningTokens)
+            entries.push(['输出含推理', usage.reasoningTokens]);
+        if (usage.cachedInputTokens)
+            entries.push(['输入含缓存', usage.cachedInputTokens]);
+    }
+    if (partialAttempts) entries.push(['部分用量', partialAttempts]);
+    if (unknownAttempts) entries.push(['用量未返回', unknownAttempts]);
+    const notes = legacyAttempts
+        ? ['旧回复仅计入现存记录，早期重试可能未收录。']
+        : [];
+    renderMetricDetails(byId('session-usage-detail'), entries, notes);
+}
+
+function renderContextEstimate(estimate) {
+    const label = byId('context-label');
+    const detail = byId('context-detail');
+    contextMeter.dataset.overBudget = String(
+        Boolean(estimate?.overBudgetTokens),
+    );
+    if (!estimate) {
+        label.textContent = '上下文窗口 · 待估算';
+        detail.replaceChildren();
+        return;
+    }
+    const {
+        windowTokens,
+        inputTokens,
+        reservedOutputTokens,
+        remainingTokens,
+        overBudgetTokens,
+        step,
+        pendingSearch,
+    } = estimate;
+    const number = (value) => tokenFormat.format(value);
+    const prefix = step ? `第 ${step} 步` : '上下文';
+    label.textContent =
+        windowTokens === null
+            ? `${prefix} · 容量未知`
+            : overBudgetTokens > 0
+              ? `${prefix} · 预计超出 ${number(overBudgetTokens)} Tokens`
+              : `${prefix} · 预计剩余 ${number(remainingTokens)} / ${number(windowTokens)} Tokens`;
+    const entries = [
+        ['预计输入', inputTokens],
+        ['预留输出', reservedOutputTokens],
+    ];
+    if (windowTokens !== null) entries.push(['窗口容量', windowTokens]);
+    const notes = ['按本轮发送的内容估算，实际用量以模型返回为准。'];
+    if (pendingSearch) notes.push('发送前的估算尚未计入本轮搜索结果。');
+    renderMetricDetails(detail, entries, notes);
+}
+
+function queueContextPreview() {
+    const version = ++contextRequest;
+    clearTimeout(contextTimer);
+    if (state.pending || !state.modelAvailable) return;
+    contextTimer = setTimeout(async () => {
+        try {
+            const estimate = await request(
+                workspaces[state.mode].api + '/context',
+                {
+                    method: 'POST',
+                    body: {
+                        conversationId: state.conversation?.id,
+                        draft: input.value.trim(),
+                        thinking: state.thinking,
+                        webSearch:
+                            state.mode === 'chat' &&
+                            state.webSearchAvailable &&
+                            state.webSearch,
+                    },
+                },
+            );
+            if (version === contextRequest && !state.pending)
+                renderContextEstimate(estimate);
+        } catch {
+            if (version === contextRequest && !state.pending)
+                renderContextEstimate(null);
+        }
+    }, 320);
 }
 
 function positionMenu(menu, summary) {
@@ -516,6 +630,7 @@ function fillAssistant(body, message, canRetry) {
 }
 
 function renderConversation({ follow = true } = {}) {
+    renderUsageSummary();
     const conversation = state.conversation;
     byId('conversation-title').textContent =
         conversation?.title ?? defaultTitle;
@@ -555,6 +670,8 @@ function setConversation(conversation) {
     savePreference(workspaces[state.mode].preference, conversation?.id ?? null);
     renderConversation();
     renderHistory();
+    renderContextEstimate(null);
+    queueContextPreview();
 }
 
 async function openConversation(id) {
@@ -626,6 +743,7 @@ async function sendReply({ retry = false } = {}) {
     if (!retry && !text) return;
     const pending = { abort: new AbortController() };
     state.pending = pending;
+    queueContextPreview();
     conversationRequest++;
     updateControls();
 
@@ -712,6 +830,8 @@ async function sendReply({ retry = false } = {}) {
                 frame ??= requestAnimationFrame(paint);
             } else if (part.type === 'data-usage') {
                 reply.usage = part.data;
+            } else if (part.type === 'data-context') {
+                renderContextEstimate(part.data);
             } else if (
                 part.type === 'data-agent-search' ||
                 part.type === 'data-chat-search'
@@ -781,6 +901,7 @@ async function sendReply({ retry = false } = {}) {
         }
         if (error) report(error);
         renderConversation({ follow: nearBottom() });
+        queueContextPreview();
         renderHistory();
         loadHistory().catch(() => {});
     }
@@ -924,11 +1045,13 @@ stopButton.addEventListener('click', () => {
 thinkingToggle.addEventListener('click', () => {
     state.thinking = !state.thinking;
     updateControls();
+    queueContextPreview();
 });
 
 webSearchToggle.addEventListener('click', () => {
     state.webSearch = !state.webSearch;
     updateControls();
+    queueContextPreview();
 });
 
 welcome.addEventListener('click', (event) => {
@@ -990,6 +1113,7 @@ async function loadModel() {
         workspaceNotice.textContent = noticeText;
         workspaceNotice.hidden = !noticeText;
         updateControls();
+        queueContextPreview();
     } catch {
         if (mode !== state.mode) return;
         pill.title = '模型配置读取失败';
@@ -1014,6 +1138,8 @@ function showWorkspace() {
     state.thinkingAvailable = false;
     state.webSearchAvailable = false;
     state.modelAvailable = !agent;
+    renderContextEstimate(null);
+    queueContextPreview();
     byId('model-label').textContent = '读取模型中';
     renderConversation();
     renderHistory();

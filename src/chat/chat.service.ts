@@ -19,6 +19,11 @@ import {
 } from '../search/web-search.js';
 import { addSearchContext } from './chat-search.js';
 import {
+    ContextWindowService,
+    type ContextRequest,
+    type ContextEstimate,
+} from './context-window.js';
+import {
     LmStudioThinkingService,
     lmStudioResponsesModel,
 } from './lm-studio-thinking.service.js';
@@ -53,6 +58,7 @@ export class ChatService {
         private readonly prompts: PromptService,
         private readonly thinking: LmStudioThinkingService,
         private readonly webSearch: WebSearchProvider,
+        private readonly contextWindow: ContextWindowService,
     ) {}
 
     async model() {
@@ -62,6 +68,16 @@ export class ChatService {
             thinkingAvailable: await this.thinking.isAvailable(),
             searchAvailable: this.searchAvailable(),
         };
+    }
+
+    contextPreview(messages: ModelMessage[], request: ContextRequest) {
+        const webSearch = request.webSearch === true && this.searchAvailable();
+        return this.contextWindow.preview(
+            'chat',
+            this.prompts.renderSystemPrompt(undefined, webSearch),
+            messages,
+            { ...request, webSearch },
+        );
     }
 
     async stream(
@@ -88,36 +104,43 @@ export class ChatService {
                           : 'AI_MAX_OUTPUT_TOKENS',
                   );
         let usage: ReplyUsage | undefined;
+        const contextUpdates: ContextEstimate[] = [];
         const startModel = (context: ModelMessage[]) => {
             const timeout = AbortSignal.timeout(
                 this.config.getOrThrow<number>(
                     thinking ? 'AI_DEEP_TIMEOUT_MS' : 'AI_TIMEOUT_MS',
                 ),
             );
-            const answer = this.ai.streamText({
-                instructions: this.prompts.renderSystemPrompt(
-                    undefined,
-                    Boolean(search),
-                ),
-                messages: context,
-                abortSignal: AbortSignal.any([clientSignal, timeout]),
-                maxOutputTokens,
-                onUsage: (event) => {
-                    usage = addPartialUsage(usage, event.usage);
-                },
-                ...(thinking !== undefined && {
-                    model: lmStudioResponsesModel,
-                    providerOptions: {
-                        openai: {
-                            forceReasoning: true,
-                            systemMessageMode: 'system',
-                            reasoningEffort: thinking ? 'high' : 'none',
-                            reasoningSummary: null,
-                            store: false,
+            const answer = this.contextWindow.observe(
+                'chat',
+                thinking,
+                (value) => contextUpdates.push(value),
+                () =>
+                    this.ai.streamText({
+                        instructions: this.prompts.renderSystemPrompt(
+                            undefined,
+                            Boolean(search),
+                        ),
+                        messages: context,
+                        abortSignal: AbortSignal.any([clientSignal, timeout]),
+                        maxOutputTokens,
+                        onUsage: (event) => {
+                            usage = addPartialUsage(usage, event.usage);
                         },
-                    },
-                }),
-            });
+                        ...(thinking !== undefined && {
+                            model: lmStudioResponsesModel,
+                            providerOptions: {
+                                openai: {
+                                    forceReasoning: true,
+                                    systemMessageMode: 'system',
+                                    reasoningEffort: thinking ? 'high' : 'none',
+                                    reasoningSummary: null,
+                                    store: false,
+                                },
+                            },
+                        }),
+                    }),
+            );
             return {
                 answer,
                 errorText: () =>
@@ -172,6 +195,9 @@ export class ChatService {
             return answer.toUIMessageStream({ errorText }).pipeThrough(
                 new TransformStream<UIMessageChunk, UIMessageChunk>({
                     async transform(part, controller) {
+                        for (const data of contextUpdates.splice(0)) {
+                            controller.enqueue({ type: 'data-context', data });
+                        }
                         if (
                             thinking === false &&
                             part.type === 'reasoning-delta'

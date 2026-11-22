@@ -445,6 +445,55 @@ kbd {
     height: 0.98rem;
 }
 
+.session-metrics {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.95rem;
+    padding: 0.5rem clamp(0.85rem, 2.5vw, 1.65rem);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.session-metric summary {
+    width: fit-content;
+    cursor: pointer;
+}
+
+.session-metric[open] summary {
+    color: var(--accent-ink);
+}
+
+.session-metric[data-over-budget='true'] summary {
+    color: var(--danger);
+}
+
+.metric-panel {
+    max-width: min(19rem, 100%);
+    padding-top: 0.42rem;
+}
+
+.metric-panel dl {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 0.16rem 0.85rem;
+    margin: 0;
+}
+
+.metric-panel dd {
+    margin: 0;
+    text-align: end;
+    color: var(--ink);
+}
+
+.metric-panel p {
+    margin: 0.35rem 0 0;
+}
+
 .icon-button {
     display: inline-grid;
     place-items: center;
